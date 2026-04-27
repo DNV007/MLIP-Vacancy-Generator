@@ -1,4 +1,4 @@
-# Guide to `generate_vacancy_structures_for_MLIP_datasetv3.py`
+# Guide to `generate_vacancy_structures_for_MLIP_datasetv6.py`
 
 This README explains:
 

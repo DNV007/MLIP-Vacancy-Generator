@@ -1,0 +1,16 @@
+0. Include rattle effects for whole structure as loop (maybe 10 times per step)
+
+1. Data saving module
+1.1 Get structure as json or atoms
+1.2 Pass structure to calculation dir generation subscript
+
+2. DFT calculation module
+2.1 Prototype INCAR
+2.2 Isolated atom reference energies (important)
+
+3. Data extraction module
+
+4. MLIP generation module
+
+5. Benchmarking module (could also be 2. and tested independently)
+

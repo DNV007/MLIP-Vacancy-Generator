@@ -1,0 +1,43 @@
+# Migration image generator — input file
+# Run with: python -m vacancy_generator.migration_runner generate_migration_images.inp
+#
+# Lines starting with # or ; are comments.
+# Each key shows its programmatic default in parentheses.
+# Edit the values to match your system before running.
+
+[structure]
+poscar_file = POSCAR          # path to the input POSCAR / CONTCAR  (default: POSCAR)
+symprec     = 1e-3            # spglib symmetry tolerance            (default: 1e-3)
+match_tol   = 1e-4            # fractional-coordinate site-matching  (default: 1e-4)
+
+[supercell]
+enabled    = false            # build a supercell automatically       (default: false)
+min_length = 10.0             # minimum lattice-vector length in Å   (default: 10.0)
+max_atoms  = 400              # hard upper limit on supercell size    (default: 400)
+
+[defect]
+recipe = Mg:1                 # REQUIRED — species:count, e.g. "Mg:1" or "Mg:1, Se:2"
+
+[migration]
+target_family    = all        # all | direct | tetrahedral | octahedral  (default: all)
+hop_cutoff       = 4.0        # max source-to-vacancy distance (Å)        (default: 4.0)
+max_candidates   = 6          # source-site candidates per vacancy        (default: 6)
+max_assignments  = 5          # source→vacancy assignments per combo      (default: 5)
+path_images      = 8          # images along each path (>= 2)            (default: 5)
+saddle_shift     = 0.15       # perpendicular saddle-point shift (Å)     (default: 0.15)
+both_saddle_sides = false     # write both + and - saddle images         (default: false)
+sampling_seed    = 42      # random seed for reproducible rattling    (default: 12345)
+
+# Rattling — set seeds_per_image = 0 to disable rattling entirely (default: 0)
+seeds_per_image  = 8          # rattled copies per path image
+rattle_all       = true       # true = rattle every atom (default); false = only near the vacancy
+perturb_radius   = 4.0        # radius used only when rattle_all = false (Å)    (default: 4.0)
+min_rattle       = 0.05       # smallest max displacement in sweep (Å)   (default: 0.02)
+max_rattle       = 0.3       # largest max displacement in sweep (Å)    (default: 0.08)
+distance_scale   = 0.55       # min-distance filter scale on atomic radii (default: 0.55)
+distance_floor   = 0.80       # min-distance filter absolute floor (Å)   (default: 0.80)
+
+[output]
+output_dir            =       # leave empty to auto-generate from POSCAR name  (default: empty)
+write_base_structures = true  # write the unperturbed vacancy structure        (default: true)
+write_extxyz          = false # write .extxyz files in addition to .vasp       (default: false)

@@ -173,15 +173,25 @@ def random_unit_vector(rng: np.random.Generator) -> np.ndarray:
             return vec / norm
 
 
-def make_rattled_copy_near_vacancies(defect_structure: Structure,
-                                     parent_structure: Structure,
-                                     removed_indices: Tuple[int, ...],
-                                     radius: float,
-                                     max_displacement: float,
-                                     rng: np.random.Generator) -> Tuple[Structure, List[int]]:
-    """Create a perturbed copy of a defect structure near the vacancy sites."""
-    vacancy_cart_coords = [parent_structure[i].coords for i in removed_indices]
-    target_indices = get_nearby_atom_indices(defect_structure, vacancy_cart_coords, radius)
+def make_rattled_copy_near_vacancies(
+    defect_structure: Structure,
+    parent_structure: Structure,
+    removed_indices: Tuple[int, ...],
+    radius: float,
+    max_displacement: float,
+    rng: np.random.Generator,
+    rattle_all: bool = True,
+) -> Tuple[Structure, List[int]]:
+    """Create a perturbed copy of a defect structure.
+
+    When *rattle_all* is ``True`` (default) every atom is displaced.
+    When ``False``, only atoms within *radius* Å of a vacancy site are displaced.
+    """
+    if rattle_all:
+        target_indices = list(range(len(defect_structure)))
+    else:
+        vacancy_cart_coords = [parent_structure[i].coords for i in removed_indices]
+        target_indices = get_nearby_atom_indices(defect_structure, vacancy_cart_coords, radius)
 
     new_structure = defect_structure.copy()
     for idx in target_indices:

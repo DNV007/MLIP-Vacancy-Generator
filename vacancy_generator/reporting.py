@@ -28,7 +28,7 @@ def describe_output_summary(records: List[dict]) -> None:
     for key in sorted(by_type):
         print(f"  {key}: {by_type[key]}")
 
-    written = sum(1 for r in records if r["record_type"] != "rejected_seed")
+    written = sum(1 for r in records if not r["record_type"].startswith("rejected_"))
     print(f"  Total written structures: {written}")
 
 
@@ -36,7 +36,7 @@ def build_dataset_report(records: List[dict], summary: dict) -> dict:
     """Build a compact report of uniqueness and diversity statistics."""
     report: dict = {
         "total_records": len(records),
-        "written_records": sum(1 for r in records if r["record_type"] != "rejected_seed"),
+        "written_records": sum(1 for r in records if not r["record_type"].startswith("rejected_")),
         "record_type_counts": dict(Counter(r["record_type"] for r in records)),
         "unique_canonical_hashes": len(
             {r["canonical_hash"] for r in records if r.get("canonical_hash")}
@@ -62,7 +62,7 @@ def build_dataset_report(records: List[dict], summary: dict) -> dict:
         )
         report["migration_path_index_counts"] = dict(
             Counter(
-                (r.get("migration_target_family", ""), str(r.get("path_index", "")))
+                f"{r.get('migration_target_family', '')}_{r.get('path_index', '')}"
                 for r in migration_records
             )
         )

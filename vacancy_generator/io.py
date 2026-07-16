@@ -35,6 +35,12 @@ _METADATA_FIELD_ORDER = [
     "perturbed_atom_indices",
     "migration_target_family",
     "migration_target_points_A",
+    "path_index",
+    "path_fraction",
+    "image_index",
+    "migration_source_indices",
+    "migration_vacancy_indices",
+    "saddle_sign",
 ]
 
 
@@ -65,14 +71,18 @@ def migration_filename(base_name: str,
                        path_index: int,
                        image_index: int,
                        saddle_sign: int,
-                       extension: str = ".vasp") -> str:
-    """Build a filename for one migration-path image."""
+                       extension: str = ".vasp",
+                       seed_index: Optional[int] = None) -> str:
+    """Build a filename for one migration-path image (or a rattled seed of one)."""
     sign_text = "p" if saddle_sign >= 0 else "m"
     family_text = target_family.replace(" ", "-")
-    return (
+    base = (
         f"{base_name}_{class_label}_base{combo_index:04d}"
-        f"_{family_text}_path{path_index:04d}_{sign_text}img{image_index:03d}{extension}"
+        f"_{family_text}_path{path_index:04d}_{sign_text}img{image_index:03d}"
     )
+    if seed_index is not None:
+        base += f"_seed{seed_index:03d}"
+    return base + extension
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +256,67 @@ def build_migration_record(
         "distance_filter_reason": "",
         "path_index": path_index,
         "path_fraction": float(path_fraction),
+        "image_index": "",
+        "migration_source_indices": list(source_indices),
+        "migration_vacancy_indices": list(vacancy_indices),
+        "saddle_sign": saddle_sign,
+    }
+
+
+def build_migration_seed_record(
+    class_label: str,
+    combo_index: int,
+    seed_offset: int,
+    combo: Tuple[int, ...],
+    canonical_combo: Tuple[int, ...],
+    combo_hash: str,
+    removed_species: List[str],
+    removed_frac_coords: List[list],
+    vacancy_topology: str,
+    scaling: Tuple[int, int, int],
+    poscar_name: str,
+    extxyz_name: Optional[str],
+    path_index: int,
+    image_index: int,
+    path_fraction: float,
+    source_indices: Tuple[int, ...],
+    vacancy_indices: Tuple[int, ...],
+    target_family: str,
+    target_points: Optional[List[np.ndarray]],
+    saddle_sign: int,
+    base_record_type: str,
+    perturb_radius: float,
+    amplitude: float,
+    perturbed_indices: List[int],
+    passed: bool,
+    reason: Optional[dict],
+) -> dict:
+    """Build metadata for one rattled seed of a migration-path image."""
+    return {
+        "record_type": f"{base_record_type}_seed" if passed else f"rejected_{base_record_type}_seed",
+        "defect_class": class_label,
+        "combo_index": combo_index,
+        "seed_index": seed_offset,
+        "removed_indices": list(combo),
+        "canonical_removed_indices": list(canonical_combo),
+        "canonical_hash": combo_hash,
+        "removed_species": removed_species,
+        "removed_frac_coords": removed_frac_coords,
+        "vacancy_topology": vacancy_topology,
+        "n_removed_total": len(combo),
+        "poscar_file": poscar_name,
+        "extxyz_file": extxyz_name or "",
+        "supercell_scaling": list(scaling),
+        "perturb_radius_A": perturb_radius,
+        "max_random_displacement_A": float(amplitude),
+        "perturbed_atom_indices": perturbed_indices,
+        "migration_target_family": target_family,
+        "migration_target_points_A": [] if not target_points else [np.round(tp, 8).tolist() for tp in target_points],
+        "distance_filter_passed": passed,
+        "distance_filter_reason": json.dumps(reason) if reason else "",
+        "path_index": path_index,
+        "path_fraction": float(path_fraction),
+        "image_index": image_index,
         "migration_source_indices": list(source_indices),
         "migration_vacancy_indices": list(vacancy_indices),
         "saddle_sign": saddle_sign,

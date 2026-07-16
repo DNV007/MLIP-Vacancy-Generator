@@ -19,6 +19,7 @@ from .input_helpers import ask_choice, ask_float, ask_int, ask_string, ask_yes_n
 from .io import (
     build_base_record,
     build_migration_record,
+    build_migration_seed_record,
     build_seed_record,
     ensure_directory,
     maybe_write_extxyz,
@@ -226,6 +227,7 @@ def _write_structures(
     distance_floor: float,
     sampling_seed: int,
     summary: dict,
+    rattle_all: bool = True,
 ) -> List[dict]:
     """Write all POSCAR (and optionally extxyz) files and collect metadata."""
     metadata_records: List[dict] = []
@@ -292,6 +294,7 @@ def _write_structures(
                     perturb_radius,
                     float(amplitude),
                     np_rng,
+                    rattle_all=rattle_all,
                 )
 
                 passed, reason = structure_passes_min_distance_filter(
@@ -361,7 +364,15 @@ def _write_migration_paths(
     hop_cutoff: float,
     max_candidates_per_vacancy: int,
     max_assignments_per_combo: int,
+    seeds_per_image: int,
+    perturb_radius: float,
+    min_rattle: float,
+    max_rattle: float,
+    distance_scale: float,
+    distance_floor: float,
+    sampling_seed: int,
     summary: dict,
+    rattle_all: bool = True,
 ) -> List[dict]:
     """Write migration-path images for each vacancy combination."""
     if path_images < 2:
@@ -434,6 +445,11 @@ def _write_migration_paths(
                             )
                             if target_point is not None:
                                 target_points.append(target_point)
+                    amplitudes = (
+                        np.linspace(min_rattle, max_rattle, seeds_per_image)
+                        if seeds_per_image > 0 else np.array([])
+                    )
+
                     for image_index, fraction in enumerate(path_fractions):
                         path_structure = build_migration_image(
                             defect_structure=defect_structure,
@@ -446,23 +462,6 @@ def _write_migration_paths(
                             target_family=target_family,
                         )
 
-                        poscar_name = migration_filename(
-                            base_name, class_label, combo_index,
-                            target_family, path_index, image_index, saddle_sign, ".vasp",
-                        )
-                        poscar_path = os.path.join(output_dir, poscar_name)
-                        write_poscar(path_structure, poscar_path)
-
-                        extxyz_name = None
-                        if write_extxyz:
-                            extxyz_name = migration_filename(
-                                base_name, class_label, combo_index,
-                                target_family, path_index, image_index, saddle_sign, ".extxyz",
-                            )
-                            extxyz_path = os.path.join(output_dir, extxyz_name)
-                            if not maybe_write_extxyz(path_structure, extxyz_path):
-                                extxyz_name = None
-
                         if image_index == 0:
                             record_type = "path_start"
                         elif image_index == len(path_fractions) - 1:
@@ -472,30 +471,154 @@ def _write_migration_paths(
                         else:
                             record_type = "path_image"
 
-                        metadata_records.append(
-                            build_migration_record(
-                                class_label=class_label,
-                                combo_index=combo_index,
-                                combo=combo,
-                                canonical_combo=canonical_combo,
-                                combo_hash=combo_hash,
-                                removed_species=removed_species,
-                                removed_frac_coords=removed_frac_coords,
-                                vacancy_topology=vacancy_topology,
-                                scaling=scaling,
-                                poscar_name=poscar_name,
-                                extxyz_name=extxyz_name,
-                                path_index=path_index,
-                                path_fraction=float(fraction),
-                                source_indices=assignment,
-                                vacancy_indices=combo,
-                                target_family=target_family,
-                                target_points=target_points,
-                                saddle_sign=saddle_sign,
-                                record_type=record_type,
+                        if write_base_structures or seeds_per_image == 0:
+                            poscar_name = migration_filename(
+                                base_name, class_label, combo_index,
+                                target_family, path_index, image_index, saddle_sign, ".vasp",
                             )
-                        )
-                        summary["migration_path_images_written"] += 1
+                            poscar_path = os.path.join(output_dir, poscar_name)
+                            write_poscar(path_structure, poscar_path)
+
+                            extxyz_name = None
+                            if write_extxyz:
+                                extxyz_name = migration_filename(
+                                    base_name, class_label, combo_index,
+                                    target_family, path_index, image_index, saddle_sign, ".extxyz",
+                                )
+                                extxyz_path = os.path.join(output_dir, extxyz_name)
+                                if not maybe_write_extxyz(path_structure, extxyz_path):
+                                    extxyz_name = None
+
+                            metadata_records.append(
+                                build_migration_record(
+                                    class_label=class_label,
+                                    combo_index=combo_index,
+                                    combo=combo,
+                                    canonical_combo=canonical_combo,
+                                    combo_hash=combo_hash,
+                                    removed_species=removed_species,
+                                    removed_frac_coords=removed_frac_coords,
+                                    vacancy_topology=vacancy_topology,
+                                    scaling=scaling,
+                                    poscar_name=poscar_name,
+                                    extxyz_name=extxyz_name,
+                                    path_index=path_index,
+                                    path_fraction=float(fraction),
+                                    source_indices=assignment,
+                                    vacancy_indices=combo,
+                                    target_family=target_family,
+                                    target_points=target_points,
+                                    saddle_sign=saddle_sign,
+                                    record_type=record_type,
+                                )
+                            )
+                            summary["migration_path_images_written"] += 1
+
+                        # Rattle each path image seeds_per_image times
+                        for seed_offset, amplitude in enumerate(amplitudes, start=1):
+                            np_rng = np.random.default_rng(
+                                SeedSequence([sampling_seed, combo_index, path_index, image_index, seed_offset])
+                            )
+                            rattled, perturbed_indices = make_rattled_copy_near_vacancies(
+                                path_structure,
+                                working_structure,
+                                combo,
+                                perturb_radius,
+                                float(amplitude),
+                                np_rng,
+                                rattle_all=rattle_all,
+                            )
+                            passed, reason = structure_passes_min_distance_filter(
+                                rattled,
+                                radius_scale=distance_scale,
+                                absolute_floor=distance_floor,
+                            )
+
+                            seed_poscar_name = migration_filename(
+                                base_name, class_label, combo_index,
+                                target_family, path_index, image_index, saddle_sign, ".vasp",
+                                seed_index=seed_offset,
+                            )
+                            seed_extxyz_name = None
+
+                            if not passed:
+                                summary["migration_seed_structures_rejected"] += 1
+                                metadata_records.append(
+                                    build_migration_seed_record(
+                                        class_label=class_label,
+                                        combo_index=combo_index,
+                                        seed_offset=seed_offset,
+                                        combo=combo,
+                                        canonical_combo=canonical_combo,
+                                        combo_hash=combo_hash,
+                                        removed_species=removed_species,
+                                        removed_frac_coords=removed_frac_coords,
+                                        vacancy_topology=vacancy_topology,
+                                        scaling=scaling,
+                                        poscar_name="",
+                                        extxyz_name=None,
+                                        path_index=path_index,
+                                        image_index=image_index,
+                                        path_fraction=float(fraction),
+                                        source_indices=assignment,
+                                        vacancy_indices=combo,
+                                        target_family=target_family,
+                                        target_points=target_points,
+                                        saddle_sign=saddle_sign,
+                                        base_record_type=record_type,
+                                        perturb_radius=perturb_radius,
+                                        amplitude=float(amplitude),
+                                        perturbed_indices=perturbed_indices,
+                                        passed=False,
+                                        reason=reason,
+                                    )
+                                )
+                                continue
+
+                            seed_poscar_path = os.path.join(output_dir, seed_poscar_name)
+                            write_poscar(rattled, seed_poscar_path)
+
+                            if write_extxyz:
+                                seed_extxyz_name = migration_filename(
+                                    base_name, class_label, combo_index,
+                                    target_family, path_index, image_index, saddle_sign, ".extxyz",
+                                    seed_index=seed_offset,
+                                )
+                                seed_extxyz_path = os.path.join(output_dir, seed_extxyz_name)
+                                if not maybe_write_extxyz(rattled, seed_extxyz_path):
+                                    seed_extxyz_name = None
+
+                            metadata_records.append(
+                                build_migration_seed_record(
+                                    class_label=class_label,
+                                    combo_index=combo_index,
+                                    seed_offset=seed_offset,
+                                    combo=combo,
+                                    canonical_combo=canonical_combo,
+                                    combo_hash=combo_hash,
+                                    removed_species=removed_species,
+                                    removed_frac_coords=removed_frac_coords,
+                                    vacancy_topology=vacancy_topology,
+                                    scaling=scaling,
+                                    poscar_name=seed_poscar_name,
+                                    extxyz_name=seed_extxyz_name,
+                                    path_index=path_index,
+                                    image_index=image_index,
+                                    path_fraction=float(fraction),
+                                    source_indices=assignment,
+                                    vacancy_indices=combo,
+                                    target_family=target_family,
+                                    target_points=target_points,
+                                    saddle_sign=saddle_sign,
+                                    base_record_type=record_type,
+                                    perturb_radius=perturb_radius,
+                                    amplitude=float(amplitude),
+                                    perturbed_indices=perturbed_indices,
+                                    passed=True,
+                                    reason=None,
+                                )
+                            )
+                            summary["migration_seed_structures_written"] += 1
                 summary["migration_path_families_written"] += 1
 
     print(" " * 60, end="\r")
@@ -594,6 +717,7 @@ def main() -> None:
     max_rattle = 0.0
     distance_scale = 0.55
     distance_floor = 0.80
+    rattle_all = True
 
     migration_hop_cutoff = 0.0
     migration_max_candidates = 0
@@ -602,12 +726,15 @@ def main() -> None:
     migration_saddle_shift = 0.0
     migration_write_both_sides = True
     migration_target_family_mode = "all"
+    migration_seeds_per_image = 0
 
     if mode in {"seeded", "mlip"}:
         seeds_per_base = ask_int("How many rattled seeds per base defect", 8, min_value=0)
-        perturb_radius = ask_float(
-            "Perturb atoms within this radius of each vacancy site (Å)", 4.0
-        )
+        rattle_all = ask_yes_no("Rattle all atoms in the structure?", default=True)
+        if not rattle_all:
+            perturb_radius = ask_float(
+                "Perturb atoms within this radius of each vacancy site (Å)", 4.0
+            )
         min_rattle = ask_float(
             "Smallest maximum random displacement used for a seed (Å)", 0.02
         )
@@ -642,6 +769,27 @@ def main() -> None:
         migration_write_both_sides = ask_yes_no(
             "Write both + and - saddle-side images?", default=False
         )
+        migration_seeds_per_image = ask_int(
+            "How many rattled seeds per path image (0 = none)", 4, min_value=0
+        )
+        if migration_seeds_per_image > 0:
+            rattle_all = ask_yes_no("Rattle all atoms in the structure?", default=True)
+            if not rattle_all:
+                perturb_radius = ask_float(
+                    "Perturb atoms within this radius of each vacancy site (Å)", 4.0
+                )
+            min_rattle = ask_float(
+                "Smallest maximum random displacement used for a seed (Å)", 0.02
+            )
+            max_rattle = ask_float(
+                "Largest maximum random displacement used for a seed (Å)", 0.08
+            )
+            if max_rattle < min_rattle:
+                raise ValueError("Largest displacement must be >= smallest displacement.")
+            distance_scale = ask_float("Minimum-distance filter scale factor", 0.55)
+            distance_floor = ask_float(
+                "Absolute minimum allowed interatomic distance (Å)", 0.80
+            )
 
     write_extxyz = ask_yes_no(
         "Also write extxyz files when ASE is available?",
@@ -680,6 +828,9 @@ def main() -> None:
         "migration_assignments_enumerated": 0,
         "migration_path_images_written": 0,
         "migration_path_families_written": 0,
+        "migration_seeds_per_image": migration_seeds_per_image if mode == "migration" else None,
+        "migration_seed_structures_written": 0,
+        "migration_seed_structures_rejected": 0,
     }
 
     if mode == "migration":
@@ -702,7 +853,15 @@ def main() -> None:
             hop_cutoff=migration_hop_cutoff,
             max_candidates_per_vacancy=migration_max_candidates,
             max_assignments_per_combo=migration_max_assignments,
+            seeds_per_image=migration_seeds_per_image,
+            perturb_radius=perturb_radius,
+            min_rattle=min_rattle,
+            max_rattle=max_rattle,
+            distance_scale=distance_scale,
+            distance_floor=distance_floor,
+            sampling_seed=sampling_seed,
             summary=summary,
+            rattle_all=rattle_all,
         )
     else:
         metadata_records = _write_structures(
@@ -726,6 +885,7 @@ def main() -> None:
             distance_floor=distance_floor,
             sampling_seed=sampling_seed,
             summary=summary,
+            rattle_all=rattle_all,
         )
 
     metadata_csv_path = os.path.join(output_dir, "metadata.csv")

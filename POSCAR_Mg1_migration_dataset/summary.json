@@ -1,0 +1,33 @@
+{
+  "config_file": "/home/utzinator/Documents/Git/MLIP-Vacancy-Generator/generate_migration_images.inp",
+  "input_file": "POSCAR",
+  "supercell_scaling": [
+    1,
+    1,
+    1
+  ],
+  "symprec": 0.001,
+  "site_match_tolerance": 0.0001,
+  "defect_recipe": {
+    "Mg": 1
+  },
+  "defect_class": "Mg1",
+  "mode": "migration",
+  "raw_combinations": 8,
+  "unique_combinations": 1,
+  "base_structures_written": 1,
+  "migration_hop_cutoff_A": 4.0,
+  "migration_max_candidates_per_vacancy": 6,
+  "migration_max_assignments_per_combo": 5,
+  "migration_path_images": 8,
+  "migration_saddle_shift_A": 0.15,
+  "migration_write_both_sides": false,
+  "migration_target_family_mode": "all",
+  "migration_seeds_per_image": 8,
+  "migration_rattle_all": true,
+  "migration_assignments_enumerated": 5,
+  "migration_path_images_written": 120,
+  "migration_path_families_written": 15,
+  "migration_seed_structures_written": 939,
+  "migration_seed_structures_rejected": 21
+}

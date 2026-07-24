@@ -678,35 +678,34 @@ class TestIO:
 
     def test_build_base_record_fields(self):
         from vacancy_generator.io import build_base_record
-        record = build_base_record(
-            class_label="Mg1",
-            combo_index=1,
-            combo=(5,),
-            canonical_combo=(5,),
-            combo_hash="abc123",
-            removed_species=["Mg"],
-            removed_frac_coords=[[0.25, 0.25, 0.25]],
-            vacancy_topology="single",
+        from vacancy_generator.records import ComboContext
+        ctx = ComboContext(
+            class_label="Mg1", combo_index=1, combo=(5,), canonical_combo=(5,),
+            combo_hash="abc123", removed_species=["Mg"],
+            removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
             scaling=(1, 1, 1),
-            poscar_name="foo.vasp",
-            extxyz_name=None,
         )
-        assert record["record_type"] == "base"
-        assert record["distance_filter_passed"] is True
-        assert record["n_removed_total"] == 1
+        record = build_base_record(ctx, poscar_name="foo.vasp", extxyz_name=None)
+        assert record.record_type == "base"
+        assert record.distance_filter_passed is True
+        assert record.n_removed_total == 1
 
     def test_build_seed_record_rejected(self):
         from vacancy_generator.io import build_seed_record
-        record = build_seed_record(
-            class_label="Mg1", combo_index=1, seed_offset=2,
-            combo=(5,), canonical_combo=(5,), combo_hash="abc123",
-            removed_species=["Mg"], removed_frac_coords=[[0.25, 0.25, 0.25]],
-            vacancy_topology="single", scaling=(1, 1, 1),
-            perturb_radius=4.0, amplitude=0.1, perturbed_indices=[3, 4],
-            passed=False, reason={"pair": (0, 1)}, poscar_name="", extxyz_name=None,
+        from vacancy_generator.records import ComboContext
+        ctx = ComboContext(
+            class_label="Mg1", combo_index=1, combo=(5,), canonical_combo=(5,),
+            combo_hash="abc123", removed_species=["Mg"],
+            removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
+            scaling=(1, 1, 1),
         )
-        assert record["record_type"] == "rejected_seed"
-        assert record["distance_filter_passed"] is False
+        record = build_seed_record(
+            ctx, seed_offset=2, perturb_radius=4.0, amplitude=0.1,
+            perturbed_indices=[3, 4], passed=False, reason={"pair": (0, 1)},
+            poscar_name="", extxyz_name=None,
+        )
+        assert record.record_type == "rejected_seed"
+        assert record.distance_filter_passed is False
 
 
 # ===========================================================================
@@ -721,32 +720,45 @@ class TestJSONSerialisability:
     """
 
     def _assert_json_round_trips(self, data: object, label: str) -> None:
-        """Serialise to a string and parse it back; assert no TypeError is raised."""
+        """Serialise to a string and parse it back; assert no TypeError is raised.
+
+        Accepts plain JSON-able data (dicts/lists) or a MetadataRecord, which
+        is flattened via ``to_dict()`` first since dataclasses are not
+        natively JSON-serialisable.
+        """
+        from vacancy_generator.records import MetadataRecord
+        payload = data.to_dict() if isinstance(data, MetadataRecord) else data
         try:
-            serialised = json.dumps(data)
+            serialised = json.dumps(payload)
         except TypeError as exc:
             raise AssertionError(f"{label} is not JSON-serialisable: {exc}") from exc
         recovered = json.loads(serialised)
         assert recovered is not None
 
-    def test_base_record_is_json_serialisable(self):
-        from vacancy_generator.io import build_base_record
-        record = build_base_record(
+    @staticmethod
+    def _combo_context(**overrides):
+        from vacancy_generator.records import ComboContext
+        defaults = dict(
             class_label="Mg1", combo_index=1, combo=(0,), canonical_combo=(0,),
             combo_hash="abc123", removed_species=["Mg"],
             removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-            scaling=(1, 1, 1), poscar_name="foo.vasp", extxyz_name=None,
+            scaling=(1, 1, 1),
+        )
+        defaults.update(overrides)
+        return ComboContext(**defaults)
+
+    def test_base_record_is_json_serialisable(self):
+        from vacancy_generator.io import build_base_record
+        record = build_base_record(
+            self._combo_context(), poscar_name="foo.vasp", extxyz_name=None,
         )
         self._assert_json_round_trips(record, "base record")
 
     def test_seed_record_is_json_serialisable(self):
         from vacancy_generator.io import build_seed_record
         record = build_seed_record(
-            class_label="Mg1", combo_index=1, seed_offset=1, combo=(0,),
-            canonical_combo=(0,), combo_hash="abc123", removed_species=["Mg"],
-            removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-            scaling=(1, 1, 1), perturb_radius=4.0, amplitude=0.05,
-            perturbed_indices=[2, 3], passed=True, reason=None,
+            self._combo_context(), seed_offset=1, perturb_radius=4.0,
+            amplitude=0.05, perturbed_indices=[2, 3], passed=True, reason=None,
             poscar_name="foo_seed.vasp", extxyz_name=None,
         )
         self._assert_json_round_trips(record, "accepted seed record")
@@ -755,11 +767,8 @@ class TestJSONSerialisability:
         from vacancy_generator.io import build_seed_record
         reason = {"pair": (0, 1), "species": ("Mg", "Mg"), "distance": 0.3, "minimum_allowed": 0.8}
         record = build_seed_record(
-            class_label="Mg1", combo_index=1, seed_offset=2, combo=(0,),
-            canonical_combo=(0,), combo_hash="abc123", removed_species=["Mg"],
-            removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-            scaling=(1, 1, 1), perturb_radius=4.0, amplitude=0.1,
-            perturbed_indices=[2], passed=False, reason=reason,
+            self._combo_context(), seed_offset=2, perturb_radius=4.0,
+            amplitude=0.1, perturbed_indices=[2], passed=False, reason=reason,
             poscar_name="", extxyz_name=None,
         )
         self._assert_json_round_trips(record, "rejected seed record")
@@ -767,10 +776,7 @@ class TestJSONSerialisability:
     def test_migration_record_is_json_serialisable(self):
         from vacancy_generator.io import build_migration_record
         record = build_migration_record(
-            class_label="Mg1", combo_index=1, combo=(0,), canonical_combo=(0,),
-            combo_hash="abc123", removed_species=["Mg"],
-            removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-            scaling=(1, 1, 1), poscar_name="img.vasp", extxyz_name=None,
+            self._combo_context(), poscar_name="img.vasp", extxyz_name=None,
             path_index=1, path_fraction=0.5, source_indices=(3,),
             vacancy_indices=(0,), target_family="direct",
             target_points=None, saddle_sign=1, record_type="path_saddle",
@@ -782,10 +788,8 @@ class TestJSONSerialisability:
         from vacancy_generator.reporting import build_dataset_report
         records = [
             build_base_record(
-                class_label="Mg1", combo_index=i, combo=(i,), canonical_combo=(0,),
-                combo_hash="abc123", removed_species=["Mg"],
-                removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-                scaling=(1, 1, 1), poscar_name=f"foo{i}.vasp", extxyz_name=None,
+                self._combo_context(combo_index=i), poscar_name=f"foo{i}.vasp",
+                extxyz_name=None,
             )
             for i in range(3)
         ]
@@ -805,10 +809,8 @@ class TestJSONSerialisability:
                 for img_idx, fraction in enumerate([0.0, 0.5, 1.0]):
                     rtype = {0: "path_start", 1: "path_saddle", 2: "path_end"}[img_idx]
                     records.append(build_migration_record(
-                        class_label="Mg1", combo_index=1, combo=(0,), canonical_combo=(0,),
-                        combo_hash="abc123", removed_species=["Mg"],
-                        removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-                        scaling=(1, 1, 1), poscar_name=f"{family}_{path_idx}_{img_idx}.vasp",
+                        self._combo_context(),
+                        poscar_name=f"{family}_{path_idx}_{img_idx}.vasp",
                         extxyz_name=None, path_index=path_idx, path_fraction=fraction,
                         source_indices=(3,), vacancy_indices=(0,), target_family=family,
                         target_points=None, saddle_sign=1, record_type=rtype,
@@ -841,10 +843,8 @@ class TestJSONSerialisability:
         from vacancy_generator.io import build_base_record, save_json
         records = [
             build_base_record(
-                class_label="Mg1", combo_index=i, combo=(i,), canonical_combo=(0,),
-                combo_hash="abc123", removed_species=["Mg"],
-                removed_frac_coords=[[0.25, 0.25, 0.25]], vacancy_topology="single",
-                scaling=(1, 1, 1), poscar_name=f"foo{i}.vasp", extxyz_name=None,
+                self._combo_context(combo_index=i), poscar_name=f"foo{i}.vasp",
+                extxyz_name=None,
             )
             for i in range(5)
         ]

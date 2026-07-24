@@ -55,6 +55,7 @@ from vacancy_generator.structure_ops import (
     remove_sites_from_structure,
     structure_passes_min_distance_filter,
 )
+from vacancy_generator.records import ComboContext
 from vacancy_generator.structure_utils import get_species_counts
 from vacancy_generator.symmetry import (
     build_parent_symmetry_maps,
@@ -131,10 +132,13 @@ def case_1_single_mg_vacancy_unique(output_dir: str) -> dict:
         write_poscar(defect, fpath)
         assert os.path.isfile(fpath), f"Expected file not created: {fpath}"
 
-        records.append(build_base_record(
-            class_label, combo_index, combo, canonical, combo_hash,
-            removed_species, removed_frac, topology, SCALING, fname, None,
-        ))
+        ctx = ComboContext(
+            class_label=class_label, combo_index=combo_index, combo=combo,
+            canonical_combo=canonical, combo_hash=combo_hash,
+            removed_species=removed_species, removed_frac_coords=removed_frac,
+            vacancy_topology=topology, scaling=SCALING,
+        )
+        records.append(build_base_record(ctx, fname, None))
         print(f"  [{combo_index}] combo={combo}, topology={topology}, hash={combo_hash}")
 
     save_metadata_csv(records, os.path.join(output_dir, "metadata.csv"))
@@ -152,7 +156,7 @@ def case_1_single_mg_vacancy_unique(output_dir: str) -> dict:
 
     # Assertions
     assert len(unique) >= 1, "Expected at least one unique Mg vacancy"
-    assert all(r["record_type"] == "base" for r in records)
+    assert all(r.record_type == "base" for r in records)
     print("  Assertions passed.")
     return summary
 
@@ -201,10 +205,13 @@ def case_2_single_se_vacancy_seeded(output_dir: str) -> dict:
         # Write base structure
         base_fname = structure_filename("POSCAR", class_label, combo_index, None, ".vasp")
         write_poscar(defect, os.path.join(output_dir, base_fname))
-        records.append(build_base_record(
-            class_label, combo_index, combo, canonical, combo_hash,
-            removed_species, removed_frac, topology, SCALING, base_fname, None,
-        ))
+        ctx = ComboContext(
+            class_label=class_label, combo_index=combo_index, combo=combo,
+            canonical_combo=canonical, combo_hash=combo_hash,
+            removed_species=removed_species, removed_frac_coords=removed_frac,
+            vacancy_topology=topology, scaling=SCALING,
+        )
+        records.append(build_base_record(ctx, base_fname, None))
 
         amplitudes = np.linspace(MIN_RATTLE, MAX_RATTLE, SEEDS_PER_BASE)
         seed_sequences = combo_sequences[combo_index - 1].spawn(SEEDS_PER_BASE)
@@ -220,9 +227,8 @@ def case_2_single_se_vacancy_seeded(output_dir: str) -> dict:
             if not passed:
                 rejected += 1
                 records.append(build_seed_record(
-                    class_label, combo_index, seed_offset, combo, canonical, combo_hash,
-                    removed_species, removed_frac, topology, SCALING,
-                    PERTURB_RADIUS, amplitude, perturbed_indices, False, reason, "", None,
+                    ctx, seed_offset, PERTURB_RADIUS, amplitude, perturbed_indices,
+                    False, reason, "", None,
                 ))
                 print(f"  Seed {seed_offset} REJECTED: {reason}")
                 continue
@@ -231,9 +237,8 @@ def case_2_single_se_vacancy_seeded(output_dir: str) -> dict:
             write_poscar(rattled, os.path.join(output_dir, seed_fname))
             written += 1
             records.append(build_seed_record(
-                class_label, combo_index, seed_offset, combo, canonical, combo_hash,
-                removed_species, removed_frac, topology, SCALING,
-                PERTURB_RADIUS, amplitude, perturbed_indices, True, None, seed_fname, None,
+                ctx, seed_offset, PERTURB_RADIUS, amplitude, perturbed_indices,
+                True, None, seed_fname, None,
             ))
             print(f"  Seed {seed_offset}: amplitude={amplitude:.4f} Å, "
                   f"{len(perturbed_indices)} atoms perturbed -> ACCEPTED")
@@ -254,8 +259,8 @@ def case_2_single_se_vacancy_seeded(output_dir: str) -> dict:
 
     # Assertions
     assert written > 0, "Expected at least one seed structure to be written"
-    seed_records = [r for r in records if r["record_type"] == "seed"]
-    assert all(r["distance_filter_passed"] for r in seed_records)
+    seed_records = [r for r in records if r.record_type == "seed"]
+    assert all(r.distance_filter_passed for r in seed_records)
     print("  Assertions passed.")
     return summary
 
@@ -310,10 +315,13 @@ def case_3_single_mg_vacancy_migration(output_dir: str) -> dict:
         # Write base (vacancy) structure
         base_fname = structure_filename("POSCAR", class_label, combo_index, None, ".vasp")
         write_poscar(defect, os.path.join(output_dir, base_fname))
-        records.append(build_base_record(
-            class_label, combo_index, combo, canonical, combo_hash,
-            removed_species, removed_frac, topology, SCALING, base_fname, None,
-        ))
+        ctx = ComboContext(
+            class_label=class_label, combo_index=combo_index, combo=combo,
+            canonical_combo=canonical, combo_hash=combo_hash,
+            removed_species=removed_species, removed_frac_coords=removed_frac,
+            vacancy_topology=topology, scaling=SCALING,
+        )
+        records.append(build_base_record(ctx, base_fname, None))
 
         assignments = enumerate_migration_assignments(
             structure, combo,
@@ -364,10 +372,7 @@ def case_3_single_mg_vacancy_migration(output_dir: str) -> dict:
                     assert os.path.isfile(os.path.join(output_dir, img_fname))
                     images_written += 1
                     records.append(build_migration_record(
-                        class_label=class_label, combo_index=combo_index, combo=combo,
-                        canonical_combo=canonical, combo_hash=combo_hash,
-                        removed_species=removed_species, removed_frac_coords=removed_frac,
-                        vacancy_topology=topology, scaling=SCALING,
+                        ctx,
                         poscar_name=img_fname, extxyz_name=None,
                         path_index=path_idx, path_fraction=float(fraction),
                         source_indices=assignment, vacancy_indices=combo,
@@ -391,11 +396,8 @@ def case_3_single_mg_vacancy_migration(output_dir: str) -> dict:
                         if not passed:
                             seeds_rejected += 1
                             records.append(build_migration_seed_record(
-                                class_label=class_label, combo_index=combo_index,
-                                seed_offset=seed_offset, combo=combo, canonical_combo=canonical,
-                                combo_hash=combo_hash, removed_species=removed_species,
-                                removed_frac_coords=removed_frac, vacancy_topology=topology,
-                                scaling=SCALING, poscar_name="", extxyz_name=None,
+                                ctx, seed_offset=seed_offset,
+                                poscar_name="", extxyz_name=None,
                                 path_index=path_idx, image_index=image_idx,
                                 path_fraction=float(fraction), source_indices=assignment,
                                 vacancy_indices=combo, target_family=target_family,
@@ -414,11 +416,8 @@ def case_3_single_mg_vacancy_migration(output_dir: str) -> dict:
                         write_poscar(rattled, os.path.join(output_dir, seed_fname))
                         seeds_written += 1
                         records.append(build_migration_seed_record(
-                            class_label=class_label, combo_index=combo_index,
-                            seed_offset=seed_offset, combo=combo, canonical_combo=canonical,
-                            combo_hash=combo_hash, removed_species=removed_species,
-                            removed_frac_coords=removed_frac, vacancy_topology=topology,
-                            scaling=SCALING, poscar_name=seed_fname, extxyz_name=None,
+                            ctx, seed_offset=seed_offset,
+                            poscar_name=seed_fname, extxyz_name=None,
                             path_index=path_idx, image_index=image_idx,
                             path_fraction=float(fraction), source_indices=assignment,
                             vacancy_indices=combo, target_family=target_family,
@@ -457,12 +456,12 @@ def case_3_single_mg_vacancy_migration(output_dir: str) -> dict:
         "Total seed attempts must equal images × seeds_per_image"
     )
     # All accepted seed records must pass the distance filter
-    seed_records = [r for r in records if r["record_type"].endswith("_seed")
-                    and not r["record_type"].startswith("rejected")]
-    assert all(r["distance_filter_passed"] for r in seed_records)
+    seed_records = [r for r in records if r.record_type.endswith("_seed")
+                    and not r.record_type.startswith("rejected")]
+    assert all(r.distance_filter_passed for r in seed_records)
     # JSON serialisability
     import json
-    json.dumps(records)
+    json.dumps([r.to_dict() for r in records])
     print("  Assertions passed.")
     return summary
 

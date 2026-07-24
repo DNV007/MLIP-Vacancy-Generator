@@ -1,16 +1,19 @@
-0. Include rattle effects for whole structure as loop (maybe 10 times per step)
+DONE; 0. Include rattle effects for whole structure as loop (maybe 10 times per step)
 
-1. Data saving module
-1.1 Get structure as json or atoms
-1.2 Pass structure to calculation dir generation subscript
+DONE; 1. Data saving module
+DONE; 1.1 Get structure as json or atoms
+DONE; 1.2 Pass structure to calculation dir generation subscript
+DONE; 1.3 add dataset_type; maybe later: training, validation, test -> think about simple function to assign, e.g. statistical model "label from top to bottom, if 'training' wasn't one of the last three assignments, automatically assign 'training' to the current data point" (maybe split evenly), make splits available (e.g. x% training, y% validation, z% test -> Pareto)
 
 2. DFT calculation module
 2.1 Prototype INCAR
-2.2 Isolated atom reference energies (important)
+2.2 Isolated atom reference energies (important for transferability; can default to 0 for now)
 
 3. Data extraction module
 
 4. MLIP generation module
 
-5. Benchmarking module (could also be 2. and tested independently)
+5. Benchmarking module (could also be 2. and tested independently); implement already pre-made solution
 
+Database interface:
+Parse json into object maybe but json could be written directly to database

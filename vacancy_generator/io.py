@@ -5,7 +5,8 @@ from __future__ import annotations
 import csv
 import json
 import os
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field, fields
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 from pymatgen.core import Structure
@@ -41,6 +42,7 @@ _METADATA_FIELD_ORDER = [
     "migration_source_indices",
     "migration_vacancy_indices",
     "saddle_sign",
+    "dataset_type",
 ]
 
 
@@ -57,11 +59,13 @@ def structure_filename(base_name: str,
                        class_label: str,
                        combo_index: int,
                        seed_index: Optional[int],
-                       extension: str = ".vasp") -> str:
+                       extension: str = ".vasp",
+                       include_base_name: bool = True) -> str:
     """Build a readable filename for one output structure."""
+    prefix = f"{base_name}_" if include_base_name else ""
     if seed_index is None:
-        return f"{base_name}_{class_label}_base{combo_index:04d}{extension}"
-    return f"{base_name}_{class_label}_base{combo_index:04d}_seed{seed_index:03d}{extension}"
+        return f"{prefix}{class_label}_base{combo_index:04d}{extension}"
+    return f"{prefix}{class_label}_base{combo_index:04d}_seed{seed_index:03d}{extension}"
 
 
 def migration_filename(base_name: str,
@@ -72,12 +76,14 @@ def migration_filename(base_name: str,
                        image_index: int,
                        saddle_sign: int,
                        extension: str = ".vasp",
-                       seed_index: Optional[int] = None) -> str:
+                       seed_index: Optional[int] = None,
+                       include_base_name: bool = True) -> str:
     """Build a filename for one migration-path image (or a rattled seed of one)."""
     sign_text = "p" if saddle_sign >= 0 else "m"
     family_text = target_family.replace(" ", "-")
+    prefix = f"{base_name}_" if include_base_name else ""
     base = (
-        f"{base_name}_{class_label}_base{combo_index:04d}"
+        f"{prefix}{class_label}_base{combo_index:04d}"
         f"_{family_text}_path{path_index:04d}_{sign_text}img{image_index:03d}"
     )
     if seed_index is not None:
@@ -109,30 +115,144 @@ def maybe_write_extxyz(structure: Structure, path: str) -> bool:
 # Serialisation
 # ---------------------------------------------------------------------------
 
-def save_metadata_csv(records: List[dict], path: str) -> None:
-    """Save metadata to CSV with a canonical, human-friendly column order."""
+def save_metadata_csv(records: List[object], path: str) -> None:
+    """Save metadata to CSV with a canonical, human-friendly column order.
+
+    Accepts either ``MetadataRecord`` instances or plain dicts (e.g. SOAP rows).
+    ``None`` values are rendered by :mod:`csv` as empty strings, matching the
+    previous ``""`` sentinel behaviour.
+    """
     if not records:
         return
 
-    all_keys = {key for record in records for key in record}
+    rows = [r.to_dict() if isinstance(r, MetadataRecord) else r for r in records]
+    all_keys = {key for row in rows for key in row}
     extra_keys = sorted(all_keys - set(_METADATA_FIELD_ORDER))
     fieldnames = [f for f in _METADATA_FIELD_ORDER if f in all_keys] + extra_keys
 
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows(rows)
+
+
+def _json_default(value: Any) -> Any:
+    """Fallback serialiser for numpy types that ``json`` cannot handle natively."""
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")
+
+
+def _to_serialisable(data: object) -> object:
+    """Recursively convert metadata records to plain dicts for serialisation."""
+    if isinstance(data, MetadataRecord):
+        return data.to_dict()
+    if isinstance(data, (list, tuple)):
+        return [_to_serialisable(item) for item in data]
+    return data
 
 
 def save_json(data: object, path: str) -> None:
-    """Save Python data to a JSON file with readable indentation."""
+    """Save Python data (records, lists of records, or plain data) to JSON."""
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
+        json.dump(_to_serialisable(data), handle, indent=2, default=_json_default)
+
+
+# ---------------------------------------------------------------------------
+# Metadata record dataclasses
+# ---------------------------------------------------------------------------
+
+def _sanitise(value: Any) -> Any:
+    """Recursively convert numpy types to plain JSON/CSV-friendly Python types."""
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return [_sanitise(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitise(item) for key, item in value.items()}
+    return value
+
+
+@dataclass(kw_only=True)
+class MetadataRecord:
+    """Base metadata common to every generated structure.
+
+    Keyword-only fields so subclasses can add their own required fields without
+    tripping the "non-default follows default" ordering rule. Fields that are
+    genuinely not applicable to a record type carry ``None`` defaults rather
+    than fake ``""``/``0`` sentinels.
+    """
+
+    record_type: str
+    defect_class: str
+    combo_index: int
+    canonical_hash: str
+    poscar_file: str
+    extxyz_file: str
+    removed_indices: List[int]
+    canonical_removed_indices: List[int]
+    removed_species: List[str]
+    removed_frac_coords: List[list]
+    vacancy_topology: str
+    n_removed_total: int
+    supercell_scaling: List[int]
+    distance_filter_passed: bool
+    distance_filter_reason: str
+    seed_index: Optional[int] = None
+    dataset_type: str = "unassigned"
+
+    def to_dict(self) -> dict:
+        """Flatten to a numpy-free dict for CSV/JSON serialisation."""
+        return {f.name: _sanitise(getattr(self, f.name)) for f in fields(self)}
+
+
+@dataclass(kw_only=True)
+class BaseRecord(MetadataRecord):
+    """Unperturbed base defect structure. Perturbation fields are N/A here."""
+
+    perturb_radius_A: Optional[float] = None
+    max_random_displacement_A: Optional[float] = None
+    perturbed_atom_indices: Optional[List[int]] = None
+
+
+@dataclass(kw_only=True)
+class SeedRecord(BaseRecord):
+    """A rattled seed of a base defect (accepted or rejected)."""
+
+
+@dataclass(kw_only=True)
+class MigrationRecord(BaseRecord):
+    """One migration-path image. Non-seeded, so perturbation fields are N/A."""
+
+    migration_target_family: Optional[str] = None
+    migration_target_points_A: List[list] = field(default_factory=list)
+    path_index: Optional[int] = None
+    path_fraction: Optional[float] = None
+    image_index: Optional[int] = None
+    migration_source_indices: Optional[List[int]] = None
+    migration_vacancy_indices: Optional[List[int]] = None
+    saddle_sign: Optional[int] = None
+
+
+@dataclass(kw_only=True)
+class MigrationSeedRecord(MigrationRecord):
+    """A rattled seed of a migration-path image."""
 
 
 # ---------------------------------------------------------------------------
 # Metadata record builders
 # ---------------------------------------------------------------------------
+
+def _round_target_points(target_points: Optional[List[np.ndarray]]) -> List[list]:
+    """Round migration target points and convert to plain nested lists."""
+    if not target_points:
+        return []
+    return [np.round(tp, 8).tolist() for tp in target_points]
+
 
 def build_base_record(class_label: str,
                       combo_index: int,
@@ -144,29 +264,25 @@ def build_base_record(class_label: str,
                       vacancy_topology: str,
                       scaling: Tuple[int, int, int],
                       poscar_name: str,
-                      extxyz_name: Optional[str]) -> dict:
-    """Build the metadata dict for an unperturbed base defect structure."""
-    return {
-        "record_type": "base",
-        "defect_class": class_label,
-        "combo_index": combo_index,
-        "seed_index": "",
-        "removed_indices": list(combo),
-        "canonical_removed_indices": list(canonical_combo),
-        "canonical_hash": combo_hash,
-        "removed_species": removed_species,
-        "removed_frac_coords": removed_frac_coords,
-        "vacancy_topology": vacancy_topology,
-        "n_removed_total": len(combo),
-        "poscar_file": poscar_name,
-        "extxyz_file": extxyz_name or "",
-        "supercell_scaling": list(scaling),
-        "perturb_radius_A": "",
-        "max_random_displacement_A": "",
-        "perturbed_atom_indices": [],
-        "distance_filter_passed": True,
-        "distance_filter_reason": "",
-    }
+                      extxyz_name: Optional[str]) -> BaseRecord:
+    """Build the metadata record for an unperturbed base defect structure."""
+    return BaseRecord(
+        record_type="base",
+        defect_class=class_label,
+        combo_index=combo_index,
+        removed_indices=list(combo),
+        canonical_removed_indices=list(canonical_combo),
+        canonical_hash=combo_hash,
+        removed_species=removed_species,
+        removed_frac_coords=removed_frac_coords,
+        vacancy_topology=vacancy_topology,
+        n_removed_total=len(combo),
+        poscar_file=poscar_name,
+        extxyz_file=extxyz_name or "",
+        supercell_scaling=list(scaling),
+        distance_filter_passed=True,
+        distance_filter_reason="",
+    )
 
 
 def build_seed_record(class_label: str,
@@ -185,29 +301,29 @@ def build_seed_record(class_label: str,
                       passed: bool,
                       reason: Optional[dict],
                       poscar_name: str,
-                      extxyz_name: Optional[str]) -> dict:
-    """Build the metadata dict for one rattled seed (accepted or rejected)."""
-    return {
-        "record_type": "seed" if passed else "rejected_seed",
-        "defect_class": class_label,
-        "combo_index": combo_index,
-        "seed_index": seed_offset,
-        "removed_indices": list(combo),
-        "canonical_removed_indices": list(canonical_combo),
-        "canonical_hash": combo_hash,
-        "removed_species": removed_species,
-        "removed_frac_coords": removed_frac_coords,
-        "vacancy_topology": vacancy_topology,
-        "n_removed_total": len(combo),
-        "poscar_file": poscar_name,
-        "extxyz_file": extxyz_name or "",
-        "supercell_scaling": list(scaling),
-        "perturb_radius_A": perturb_radius,
-        "max_random_displacement_A": float(amplitude),
-        "perturbed_atom_indices": perturbed_indices,
-        "distance_filter_passed": passed,
-        "distance_filter_reason": json.dumps(reason) if reason else "",
-    }
+                      extxyz_name: Optional[str]) -> SeedRecord:
+    """Build the metadata record for one rattled seed (accepted or rejected)."""
+    return SeedRecord(
+        record_type="seed" if passed else "rejected_seed",
+        defect_class=class_label,
+        combo_index=combo_index,
+        seed_index=seed_offset,
+        removed_indices=list(combo),
+        canonical_removed_indices=list(canonical_combo),
+        canonical_hash=combo_hash,
+        removed_species=removed_species,
+        removed_frac_coords=removed_frac_coords,
+        vacancy_topology=vacancy_topology,
+        n_removed_total=len(combo),
+        poscar_file=poscar_name,
+        extxyz_file=extxyz_name or "",
+        supercell_scaling=list(scaling),
+        perturb_radius_A=perturb_radius,
+        max_random_displacement_A=float(amplitude),
+        perturbed_atom_indices=perturbed_indices,
+        distance_filter_passed=passed,
+        distance_filter_reason=json.dumps(reason) if reason else "",
+    )
 
 
 def build_migration_record(
@@ -230,37 +346,32 @@ def build_migration_record(
     target_points: Optional[List[np.ndarray]],
     saddle_sign: int,
     record_type: str,
-) -> dict:
+) -> MigrationRecord:
     """Build metadata for one migration-path image."""
-    return {
-        "record_type": record_type,
-        "defect_class": class_label,
-        "combo_index": combo_index,
-        "seed_index": "",
-        "removed_indices": list(combo),
-        "canonical_removed_indices": list(canonical_combo),
-        "canonical_hash": combo_hash,
-        "removed_species": removed_species,
-        "removed_frac_coords": removed_frac_coords,
-        "vacancy_topology": vacancy_topology,
-        "n_removed_total": len(combo),
-        "poscar_file": poscar_name,
-        "extxyz_file": extxyz_name or "",
-        "supercell_scaling": list(scaling),
-        "perturb_radius_A": "",
-        "max_random_displacement_A": "",
-        "perturbed_atom_indices": [],
-        "migration_target_family": target_family,
-        "migration_target_points_A": [] if not target_points else [np.round(tp, 8).tolist() for tp in target_points],
-        "distance_filter_passed": True,
-        "distance_filter_reason": "",
-        "path_index": path_index,
-        "path_fraction": float(path_fraction),
-        "image_index": "",
-        "migration_source_indices": list(source_indices),
-        "migration_vacancy_indices": list(vacancy_indices),
-        "saddle_sign": saddle_sign,
-    }
+    return MigrationRecord(
+        record_type=record_type,
+        defect_class=class_label,
+        combo_index=combo_index,
+        removed_indices=list(combo),
+        canonical_removed_indices=list(canonical_combo),
+        canonical_hash=combo_hash,
+        removed_species=removed_species,
+        removed_frac_coords=removed_frac_coords,
+        vacancy_topology=vacancy_topology,
+        n_removed_total=len(combo),
+        poscar_file=poscar_name,
+        extxyz_file=extxyz_name or "",
+        supercell_scaling=list(scaling),
+        migration_target_family=target_family,
+        migration_target_points_A=_round_target_points(target_points),
+        distance_filter_passed=True,
+        distance_filter_reason="",
+        path_index=path_index,
+        path_fraction=float(path_fraction),
+        migration_source_indices=list(source_indices),
+        migration_vacancy_indices=list(vacancy_indices),
+        saddle_sign=saddle_sign,
+    )
 
 
 def build_migration_seed_record(
@@ -290,34 +401,34 @@ def build_migration_seed_record(
     perturbed_indices: List[int],
     passed: bool,
     reason: Optional[dict],
-) -> dict:
+) -> MigrationSeedRecord:
     """Build metadata for one rattled seed of a migration-path image."""
-    return {
-        "record_type": f"{base_record_type}_seed" if passed else f"rejected_{base_record_type}_seed",
-        "defect_class": class_label,
-        "combo_index": combo_index,
-        "seed_index": seed_offset,
-        "removed_indices": list(combo),
-        "canonical_removed_indices": list(canonical_combo),
-        "canonical_hash": combo_hash,
-        "removed_species": removed_species,
-        "removed_frac_coords": removed_frac_coords,
-        "vacancy_topology": vacancy_topology,
-        "n_removed_total": len(combo),
-        "poscar_file": poscar_name,
-        "extxyz_file": extxyz_name or "",
-        "supercell_scaling": list(scaling),
-        "perturb_radius_A": perturb_radius,
-        "max_random_displacement_A": float(amplitude),
-        "perturbed_atom_indices": perturbed_indices,
-        "migration_target_family": target_family,
-        "migration_target_points_A": [] if not target_points else [np.round(tp, 8).tolist() for tp in target_points],
-        "distance_filter_passed": passed,
-        "distance_filter_reason": json.dumps(reason) if reason else "",
-        "path_index": path_index,
-        "path_fraction": float(path_fraction),
-        "image_index": image_index,
-        "migration_source_indices": list(source_indices),
-        "migration_vacancy_indices": list(vacancy_indices),
-        "saddle_sign": saddle_sign,
-    }
+    return MigrationSeedRecord(
+        record_type=f"{base_record_type}_seed" if passed else f"rejected_{base_record_type}_seed",
+        defect_class=class_label,
+        combo_index=combo_index,
+        seed_index=seed_offset,
+        removed_indices=list(combo),
+        canonical_removed_indices=list(canonical_combo),
+        canonical_hash=combo_hash,
+        removed_species=removed_species,
+        removed_frac_coords=removed_frac_coords,
+        vacancy_topology=vacancy_topology,
+        n_removed_total=len(combo),
+        poscar_file=poscar_name,
+        extxyz_file=extxyz_name or "",
+        supercell_scaling=list(scaling),
+        perturb_radius_A=perturb_radius,
+        max_random_displacement_A=float(amplitude),
+        perturbed_atom_indices=perturbed_indices,
+        migration_target_family=target_family,
+        migration_target_points_A=_round_target_points(target_points),
+        distance_filter_passed=passed,
+        distance_filter_reason=json.dumps(reason) if reason else "",
+        path_index=path_index,
+        path_fraction=float(path_fraction),
+        image_index=image_index,
+        migration_source_indices=list(source_indices),
+        migration_vacancy_indices=list(vacancy_indices),
+        saddle_sign=saddle_sign,
+    )

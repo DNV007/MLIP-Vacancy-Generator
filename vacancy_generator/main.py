@@ -66,6 +66,34 @@ from .symmetry import (
 # Internal orchestration helpers
 # ---------------------------------------------------------------------------
 
+def _write_structure_to_subfolder(
+    structure: Structure,
+    sub_folder: str,
+    output_dir: str,
+    write_extxyz: bool,
+    extxyz_filename: str,
+) -> Tuple[str, str, Optional[str]]:
+    """Write POSCAR (and optionally extxyz) for one structure into its own subfolder.
+
+    Returns (structure_dir, poscar_name, extxyz_name) where the name fields are
+    paths relative to output_dir, suitable for storing in metadata records.
+    """
+    structure_dir = os.path.join(output_dir, sub_folder)
+    ensure_directory(structure_dir)
+
+    poscar_path = os.path.join(structure_dir, "POSCAR")
+    write_poscar(structure, poscar_path)
+    poscar_name = f"{sub_folder}/POSCAR"
+
+    extxyz_name = None
+    if write_extxyz:
+        extxyz_path = os.path.join(structure_dir, extxyz_filename)
+        if maybe_write_extxyz(structure, extxyz_path):
+            extxyz_name = f"{sub_folder}/{extxyz_filename}"
+
+    return structure_dir, poscar_name, extxyz_name
+
+
 def _fill_raw_combo_maps(
     combos: List[Tuple[int, ...]],
     structure: Structure,
@@ -256,26 +284,21 @@ def _write_structures(
         canonical_combo = combo_to_canonical.get(combo, combo)
 
         if write_base_structures:
-            poscar_name = structure_filename(base_name, class_label, combo_index, None, ".vasp")
-            poscar_path = os.path.join(output_dir, poscar_name)
-            write_poscar(defect_structure, poscar_path)
-
-            extxyz_name = None
-            if write_extxyz:
-                extxyz_name = structure_filename(
-                    base_name, class_label, combo_index, None, ".extxyz"
-                )
-                extxyz_path = os.path.join(output_dir, extxyz_name)
-                if not maybe_write_extxyz(defect_structure, extxyz_path):
-                    extxyz_name = None
-
-            metadata_records.append(
-                build_base_record(
-                    class_label, combo_index, combo, canonical_combo, combo_hash,
-                    removed_species, removed_frac_coords, vacancy_topology, scaling,
-                    poscar_name, extxyz_name,
-                )
+            sub_folder = structure_filename(
+                base_name, class_label, combo_index, None, "", include_base_name=False
             )
+            extxyz_filename = structure_filename(base_name, class_label, combo_index, None, ".extxyz")
+            structure_dir, poscar_name, extxyz_name = _write_structure_to_subfolder(
+                defect_structure, sub_folder, output_dir, write_extxyz, extxyz_filename
+            )
+
+            record = build_base_record(
+                class_label, combo_index, combo, canonical_combo, combo_hash,
+                removed_species, removed_frac_coords, vacancy_topology, scaling,
+                poscar_name, extxyz_name,
+            )
+            metadata_records.append(record)
+            save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
             summary["base_structures_written"] += 1
 
         if mode in {"seeded", "mlip"} and seeds_per_base > 0:
@@ -315,32 +338,28 @@ def _write_structures(
                     )
                     continue
 
-                poscar_name = structure_filename(
-                    base_name, class_label, combo_index, seed_offset, ".vasp"
+                sub_folder = structure_filename(
+                    base_name, class_label, combo_index, seed_offset, "",
+                    include_base_name=False,
                 )
-                poscar_path = os.path.join(output_dir, poscar_name)
-                write_poscar(rattled_structure, poscar_path)
-
-                extxyz_name = None
-                if write_extxyz:
-                    extxyz_name = structure_filename(
-                        base_name, class_label, combo_index, seed_offset, ".extxyz"
-                    )
-                    extxyz_path = os.path.join(output_dir, extxyz_name)
-                    if not maybe_write_extxyz(rattled_structure, extxyz_path):
-                        extxyz_name = None
-
-                metadata_records.append(
-                    build_seed_record(
-                        class_label, combo_index, seed_offset, combo,
-                        canonical_combo, combo_hash, removed_species,
-                        removed_frac_coords, vacancy_topology, scaling, perturb_radius,
-                        amplitude, perturbed_indices, True, None,
-                        poscar_name, extxyz_name,
-                    )
+                extxyz_filename = structure_filename(
+                    base_name, class_label, combo_index, seed_offset, ".extxyz"
                 )
+                structure_dir, poscar_name, extxyz_name = _write_structure_to_subfolder(
+                    rattled_structure, sub_folder, output_dir, write_extxyz, extxyz_filename
+                )
+
+                record = build_seed_record(
+                    class_label, combo_index, seed_offset, combo,
+                    canonical_combo, combo_hash, removed_species,
+                    removed_frac_coords, vacancy_topology, scaling, perturb_radius,
+                    amplitude, perturbed_indices, True, None,
+                    poscar_name, extxyz_name,
+                )
+                metadata_records.append(record)
+                save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
                 summary["seed_structures_written"] += 1
-
+                
     print(" " * 60, end="\r")
     return metadata_records
 
@@ -395,24 +414,20 @@ def _write_migration_paths(
         canonical_combo = combo_to_canonical.get(combo, combo)
 
         if write_base_structures:
-            poscar_name = structure_filename(base_name, class_label, combo_index, None, ".vasp")
-            poscar_path = os.path.join(output_dir, poscar_name)
-            write_poscar(defect_structure, poscar_path)
-            extxyz_name = None
-            if write_extxyz:
-                extxyz_name = structure_filename(
-                    base_name, class_label, combo_index, None, ".extxyz"
-                )
-                extxyz_path = os.path.join(output_dir, extxyz_name)
-                if not maybe_write_extxyz(defect_structure, extxyz_path):
-                    extxyz_name = None
-            metadata_records.append(
-                build_base_record(
-                    class_label, combo_index, combo, canonical_combo, combo_hash,
-                    removed_species, removed_frac_coords, vacancy_topology, scaling,
-                    poscar_name, extxyz_name,
-                )
+            sub_folder = structure_filename(
+                base_name, class_label, combo_index, None, "", include_base_name=False
             )
+            extxyz_filename = structure_filename(base_name, class_label, combo_index, None, ".extxyz")
+            structure_dir, poscar_name, extxyz_name = _write_structure_to_subfolder(
+                defect_structure, sub_folder, output_dir, write_extxyz, extxyz_filename
+            )
+            record = build_base_record(
+                class_label, combo_index, combo, canonical_combo, combo_hash,
+                removed_species, removed_frac_coords, vacancy_topology, scaling,
+                poscar_name, extxyz_name,
+            )
+            metadata_records.append(record)
+            save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
             summary["base_structures_written"] += 1
 
         assignments = enumerate_migration_assignments(
@@ -472,46 +487,42 @@ def _write_migration_paths(
                             record_type = "path_image"
 
                         if write_base_structures or seeds_per_image == 0:
-                            poscar_name = migration_filename(
+                            sub_folder = migration_filename(
                                 base_name, class_label, combo_index,
-                                target_family, path_index, image_index, saddle_sign, ".vasp",
+                                target_family, path_index, image_index, saddle_sign, "",
+                                include_base_name=False,
                             )
-                            poscar_path = os.path.join(output_dir, poscar_name)
-                            write_poscar(path_structure, poscar_path)
-
-                            extxyz_name = None
-                            if write_extxyz:
-                                extxyz_name = migration_filename(
-                                    base_name, class_label, combo_index,
-                                    target_family, path_index, image_index, saddle_sign, ".extxyz",
-                                )
-                                extxyz_path = os.path.join(output_dir, extxyz_name)
-                                if not maybe_write_extxyz(path_structure, extxyz_path):
-                                    extxyz_name = None
-
-                            metadata_records.append(
-                                build_migration_record(
-                                    class_label=class_label,
-                                    combo_index=combo_index,
-                                    combo=combo,
-                                    canonical_combo=canonical_combo,
-                                    combo_hash=combo_hash,
-                                    removed_species=removed_species,
-                                    removed_frac_coords=removed_frac_coords,
-                                    vacancy_topology=vacancy_topology,
-                                    scaling=scaling,
-                                    poscar_name=poscar_name,
-                                    extxyz_name=extxyz_name,
-                                    path_index=path_index,
-                                    path_fraction=float(fraction),
-                                    source_indices=assignment,
-                                    vacancy_indices=combo,
-                                    target_family=target_family,
-                                    target_points=target_points,
-                                    saddle_sign=saddle_sign,
-                                    record_type=record_type,
-                                )
+                            extxyz_filename = migration_filename(
+                                base_name, class_label, combo_index,
+                                target_family, path_index, image_index, saddle_sign, ".extxyz",
                             )
+                            structure_dir, poscar_name, extxyz_name = _write_structure_to_subfolder(
+                                path_structure, sub_folder, output_dir, write_extxyz, extxyz_filename
+                            )
+
+                            record = build_migration_record(
+                                class_label=class_label,
+                                combo_index=combo_index,
+                                combo=combo,
+                                canonical_combo=canonical_combo,
+                                combo_hash=combo_hash,
+                                removed_species=removed_species,
+                                removed_frac_coords=removed_frac_coords,
+                                vacancy_topology=vacancy_topology,
+                                scaling=scaling,
+                                poscar_name=poscar_name,
+                                extxyz_name=extxyz_name,
+                                path_index=path_index,
+                                path_fraction=float(fraction),
+                                source_indices=assignment,
+                                vacancy_indices=combo,
+                                target_family=target_family,
+                                target_points=target_points,
+                                saddle_sign=saddle_sign,
+                                record_type=record_type,
+                            )
+                            metadata_records.append(record)
+                            save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
                             summary["migration_path_images_written"] += 1
 
                         # Rattle each path image seeds_per_image times
@@ -533,13 +544,6 @@ def _write_migration_paths(
                                 radius_scale=distance_scale,
                                 absolute_floor=distance_floor,
                             )
-
-                            seed_poscar_name = migration_filename(
-                                base_name, class_label, combo_index,
-                                target_family, path_index, image_index, saddle_sign, ".vasp",
-                                seed_index=seed_offset,
-                            )
-                            seed_extxyz_name = None
 
                             if not passed:
                                 summary["migration_seed_structures_rejected"] += 1
@@ -575,52 +579,60 @@ def _write_migration_paths(
                                 )
                                 continue
 
-                            seed_poscar_path = os.path.join(output_dir, seed_poscar_name)
-                            write_poscar(rattled, seed_poscar_path)
-
-                            if write_extxyz:
-                                seed_extxyz_name = migration_filename(
-                                    base_name, class_label, combo_index,
-                                    target_family, path_index, image_index, saddle_sign, ".extxyz",
-                                    seed_index=seed_offset,
+                            seed_sub_folder = migration_filename(
+                                base_name, class_label, combo_index,
+                                target_family, path_index, image_index, saddle_sign, "",
+                                seed_index=seed_offset,
+                                include_base_name=False,
+                            )
+                            seed_extxyz_filename = migration_filename(
+                                base_name, class_label, combo_index,
+                                target_family, path_index, image_index, saddle_sign, ".extxyz",
+                                seed_index=seed_offset,
+                            )
+                            seed_structure_dir, seed_poscar_name, seed_extxyz_name = (
+                                _write_structure_to_subfolder(
+                                    rattled, seed_sub_folder, output_dir,
+                                    write_extxyz, seed_extxyz_filename,
                                 )
-                                seed_extxyz_path = os.path.join(output_dir, seed_extxyz_name)
-                                if not maybe_write_extxyz(rattled, seed_extxyz_path):
-                                    seed_extxyz_name = None
+                            )
 
-                            metadata_records.append(
-                                build_migration_seed_record(
-                                    class_label=class_label,
-                                    combo_index=combo_index,
-                                    seed_offset=seed_offset,
-                                    combo=combo,
-                                    canonical_combo=canonical_combo,
-                                    combo_hash=combo_hash,
-                                    removed_species=removed_species,
-                                    removed_frac_coords=removed_frac_coords,
-                                    vacancy_topology=vacancy_topology,
-                                    scaling=scaling,
-                                    poscar_name=seed_poscar_name,
-                                    extxyz_name=seed_extxyz_name,
-                                    path_index=path_index,
-                                    image_index=image_index,
-                                    path_fraction=float(fraction),
-                                    source_indices=assignment,
-                                    vacancy_indices=combo,
-                                    target_family=target_family,
-                                    target_points=target_points,
-                                    saddle_sign=saddle_sign,
-                                    base_record_type=record_type,
-                                    perturb_radius=perturb_radius,
-                                    amplitude=float(amplitude),
-                                    perturbed_indices=perturbed_indices,
-                                    passed=True,
-                                    reason=None,
-                                )
+                            record = build_migration_seed_record(
+                                class_label=class_label,
+                                combo_index=combo_index,
+                                seed_offset=seed_offset,
+                                combo=combo,
+                                canonical_combo=canonical_combo,
+                                combo_hash=combo_hash,
+                                removed_species=removed_species,
+                                removed_frac_coords=removed_frac_coords,
+                                vacancy_topology=vacancy_topology,
+                                scaling=scaling,
+                                poscar_name=seed_poscar_name,
+                                extxyz_name=seed_extxyz_name,
+                                path_index=path_index,
+                                image_index=image_index,
+                                path_fraction=float(fraction),
+                                source_indices=assignment,
+                                vacancy_indices=combo,
+                                target_family=target_family,
+                                target_points=target_points,
+                                saddle_sign=saddle_sign,
+                                base_record_type=record_type,
+                                perturb_radius=perturb_radius,
+                                amplitude=float(amplitude),
+                                perturbed_indices=perturbed_indices,
+                                passed=True,
+                                reason=None,
+                            )
+                            metadata_records.append(record)
+                            save_json(
+                                record,
+                                os.path.join(seed_structure_dir, f"{seed_sub_folder}.json"),
                             )
                             summary["migration_seed_structures_written"] += 1
                 summary["migration_path_families_written"] += 1
-
+                
     print(" " * 60, end="\r")
     return metadata_records
 

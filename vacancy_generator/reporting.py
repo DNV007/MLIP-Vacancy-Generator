@@ -23,12 +23,12 @@ def describe_output_summary(records: List[dict]) -> None:
 
     by_type: Dict[str, int] = defaultdict(int)
     for record in records:
-        by_type[record["record_type"]] += 1
+        by_type[record.record_type] += 1
 
     for key in sorted(by_type):
         print(f"  {key}: {by_type[key]}")
 
-    written = sum(1 for r in records if not r["record_type"].startswith("rejected_"))
+    written = sum(1 for r in records if not r.record_type.startswith("rejected_"))
     print(f"  Total written structures: {written}")
 
 
@@ -36,33 +36,33 @@ def build_dataset_report(records: List[dict], summary: dict) -> dict:
     """Build a compact report of uniqueness and diversity statistics."""
     report: dict = {
         "total_records": len(records),
-        "written_records": sum(1 for r in records if not r["record_type"].startswith("rejected_")),
-        "record_type_counts": dict(Counter(r["record_type"] for r in records)),
+        "written_records": sum(1 for r in records if not r.record_type.startswith("rejected_")),
+        "record_type_counts": dict(Counter(r.record_type for r in records)),
         "unique_canonical_hashes": len(
-            {r["canonical_hash"] for r in records if r.get("canonical_hash")}
+            {r.canonical_hash for r in records if r.canonical_hash}
         ),
         "canonical_hash_counts": dict(
-            Counter(r["canonical_hash"] for r in records if r.get("canonical_hash"))
+            Counter(r.canonical_hash for r in records if r.canonical_hash)
         ),
         "vacancy_topology_counts": dict(
-            Counter(r.get("vacancy_topology", "") for r in records if r.get("vacancy_topology"))
+            Counter(r.vacancy_topology for r in records if r.vacancy_topology)
         ),
         "seeded_or_mlip_with_soap": bool(summary.get("defect_local_soap_diversity_used")),
         "soap_settings": summary.get("soap_settings"),
     }
 
-    migration_records = [r for r in records if r["record_type"].startswith("path_")]
+    migration_records = [r for r in records if r.record_type.startswith("path_")]
     if migration_records:
         report["migration_target_family_counts"] = dict(
             Counter(
-                r.get("migration_target_family", "")
+                r.migration_target_family
                 for r in migration_records
-                if r.get("migration_target_family")
+                if r.migration_target_family
             )
         )
         report["migration_path_index_counts"] = dict(
             Counter(
-                f"{r.get('migration_target_family', '')}_{r.get('path_index', '')}"
+                f"{r.migration_target_family or ''}_{r.path_index if r.path_index is not None else ''}"
                 for r in migration_records
             )
         )

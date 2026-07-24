@@ -5,13 +5,20 @@ from __future__ import annotations
 import csv
 import json
 import os
-from dataclasses import dataclass, field, fields
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
 from pymatgen.core import Structure
 
 from ._compat import ASE_ADAPTOR_AVAILABLE, ASE_IO_AVAILABLE
+from .records import (
+    BaseRecord,
+    ComboContext,
+    MetadataRecord,
+    MigrationRecord,
+    MigrationSeedRecord,
+    SeedRecord,
+)
 
 # Canonical CSV column order for human-readable spreadsheet output.
 _METADATA_FIELD_ORDER = [
@@ -161,89 +168,6 @@ def save_json(data: object, path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Metadata record dataclasses
-# ---------------------------------------------------------------------------
-
-def _sanitise(value: Any) -> Any:
-    """Recursively convert numpy types to plain JSON/CSV-friendly Python types."""
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, (list, tuple)):
-        return [_sanitise(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _sanitise(item) for key, item in value.items()}
-    return value
-
-
-@dataclass(kw_only=True)
-class MetadataRecord:
-    """Base metadata common to every generated structure.
-
-    Keyword-only fields so subclasses can add their own required fields without
-    tripping the "non-default follows default" ordering rule. Fields that are
-    genuinely not applicable to a record type carry ``None`` defaults rather
-    than fake ``""``/``0`` sentinels.
-    """
-
-    record_type: str
-    defect_class: str
-    combo_index: int
-    canonical_hash: str
-    poscar_file: str
-    extxyz_file: str
-    removed_indices: List[int]
-    canonical_removed_indices: List[int]
-    removed_species: List[str]
-    removed_frac_coords: List[list]
-    vacancy_topology: str
-    n_removed_total: int
-    supercell_scaling: List[int]
-    distance_filter_passed: bool
-    distance_filter_reason: str
-    seed_index: Optional[int] = None
-    dataset_type: str = "unassigned"
-
-    def to_dict(self) -> dict:
-        """Flatten to a numpy-free dict for CSV/JSON serialisation."""
-        return {f.name: _sanitise(getattr(self, f.name)) for f in fields(self)}
-
-
-@dataclass(kw_only=True)
-class BaseRecord(MetadataRecord):
-    """Unperturbed base defect structure. Perturbation fields are N/A here."""
-
-    perturb_radius_A: Optional[float] = None
-    max_random_displacement_A: Optional[float] = None
-    perturbed_atom_indices: Optional[List[int]] = None
-
-
-@dataclass(kw_only=True)
-class SeedRecord(BaseRecord):
-    """A rattled seed of a base defect (accepted or rejected)."""
-
-
-@dataclass(kw_only=True)
-class MigrationRecord(BaseRecord):
-    """One migration-path image. Non-seeded, so perturbation fields are N/A."""
-
-    migration_target_family: Optional[str] = None
-    migration_target_points_A: List[list] = field(default_factory=list)
-    path_index: Optional[int] = None
-    path_fraction: Optional[float] = None
-    image_index: Optional[int] = None
-    migration_source_indices: Optional[List[int]] = None
-    migration_vacancy_indices: Optional[List[int]] = None
-    saddle_sign: Optional[int] = None
-
-
-@dataclass(kw_only=True)
-class MigrationSeedRecord(MigrationRecord):
-    """A rattled seed of a migration-path image."""
-
-
-# ---------------------------------------------------------------------------
 # Metadata record builders
 # ---------------------------------------------------------------------------
 
@@ -254,47 +178,22 @@ def _round_target_points(target_points: Optional[List[np.ndarray]]) -> List[list
     return [np.round(tp, 8).tolist() for tp in target_points]
 
 
-def build_base_record(class_label: str,
-                      combo_index: int,
-                      combo: Tuple[int, ...],
-                      canonical_combo: Tuple[int, ...],
-                      combo_hash: str,
-                      removed_species: List[str],
-                      removed_frac_coords: List[list],
-                      vacancy_topology: str,
-                      scaling: Tuple[int, int, int],
+def build_base_record(ctx: ComboContext,
                       poscar_name: str,
                       extxyz_name: Optional[str]) -> BaseRecord:
     """Build the metadata record for an unperturbed base defect structure."""
     return BaseRecord(
+        **ctx.common_fields(),
         record_type="base",
-        defect_class=class_label,
-        combo_index=combo_index,
-        removed_indices=list(combo),
-        canonical_removed_indices=list(canonical_combo),
-        canonical_hash=combo_hash,
-        removed_species=removed_species,
-        removed_frac_coords=removed_frac_coords,
-        vacancy_topology=vacancy_topology,
-        n_removed_total=len(combo),
         poscar_file=poscar_name,
         extxyz_file=extxyz_name or "",
-        supercell_scaling=list(scaling),
         distance_filter_passed=True,
         distance_filter_reason="",
     )
 
 
-def build_seed_record(class_label: str,
-                      combo_index: int,
+def build_seed_record(ctx: ComboContext,
                       seed_offset: int,
-                      combo: Tuple[int, ...],
-                      canonical_combo: Tuple[int, ...],
-                      combo_hash: str,
-                      removed_species: List[str],
-                      removed_frac_coords: List[list],
-                      vacancy_topology: str,
-                      scaling: Tuple[int, int, int],
                       perturb_radius: float,
                       amplitude: float,
                       perturbed_indices: List[int],
@@ -304,20 +203,11 @@ def build_seed_record(class_label: str,
                       extxyz_name: Optional[str]) -> SeedRecord:
     """Build the metadata record for one rattled seed (accepted or rejected)."""
     return SeedRecord(
+        **ctx.common_fields(),
         record_type="seed" if passed else "rejected_seed",
-        defect_class=class_label,
-        combo_index=combo_index,
         seed_index=seed_offset,
-        removed_indices=list(combo),
-        canonical_removed_indices=list(canonical_combo),
-        canonical_hash=combo_hash,
-        removed_species=removed_species,
-        removed_frac_coords=removed_frac_coords,
-        vacancy_topology=vacancy_topology,
-        n_removed_total=len(combo),
         poscar_file=poscar_name,
         extxyz_file=extxyz_name or "",
-        supercell_scaling=list(scaling),
         perturb_radius_A=perturb_radius,
         max_random_displacement_A=float(amplitude),
         perturbed_atom_indices=perturbed_indices,
@@ -327,15 +217,7 @@ def build_seed_record(class_label: str,
 
 
 def build_migration_record(
-    class_label: str,
-    combo_index: int,
-    combo: Tuple[int, ...],
-    canonical_combo: Tuple[int, ...],
-    combo_hash: str,
-    removed_species: List[str],
-    removed_frac_coords: List[list],
-    vacancy_topology: str,
-    scaling: Tuple[int, int, int],
+    ctx: ComboContext,
     poscar_name: str,
     extxyz_name: Optional[str],
     path_index: int,
@@ -349,19 +231,10 @@ def build_migration_record(
 ) -> MigrationRecord:
     """Build metadata for one migration-path image."""
     return MigrationRecord(
+        **ctx.common_fields(),
         record_type=record_type,
-        defect_class=class_label,
-        combo_index=combo_index,
-        removed_indices=list(combo),
-        canonical_removed_indices=list(canonical_combo),
-        canonical_hash=combo_hash,
-        removed_species=removed_species,
-        removed_frac_coords=removed_frac_coords,
-        vacancy_topology=vacancy_topology,
-        n_removed_total=len(combo),
         poscar_file=poscar_name,
         extxyz_file=extxyz_name or "",
-        supercell_scaling=list(scaling),
         migration_target_family=target_family,
         migration_target_points_A=_round_target_points(target_points),
         distance_filter_passed=True,
@@ -375,16 +248,8 @@ def build_migration_record(
 
 
 def build_migration_seed_record(
-    class_label: str,
-    combo_index: int,
+    ctx: ComboContext,
     seed_offset: int,
-    combo: Tuple[int, ...],
-    canonical_combo: Tuple[int, ...],
-    combo_hash: str,
-    removed_species: List[str],
-    removed_frac_coords: List[list],
-    vacancy_topology: str,
-    scaling: Tuple[int, int, int],
     poscar_name: str,
     extxyz_name: Optional[str],
     path_index: int,
@@ -404,20 +269,11 @@ def build_migration_seed_record(
 ) -> MigrationSeedRecord:
     """Build metadata for one rattled seed of a migration-path image."""
     return MigrationSeedRecord(
+        **ctx.common_fields(),
         record_type=f"{base_record_type}_seed" if passed else f"rejected_{base_record_type}_seed",
-        defect_class=class_label,
-        combo_index=combo_index,
         seed_index=seed_offset,
-        removed_indices=list(combo),
-        canonical_removed_indices=list(canonical_combo),
-        canonical_hash=combo_hash,
-        removed_species=removed_species,
-        removed_frac_coords=removed_frac_coords,
-        vacancy_topology=vacancy_topology,
-        n_removed_total=len(combo),
         poscar_file=poscar_name,
         extxyz_file=extxyz_name or "",
-        supercell_scaling=list(scaling),
         perturb_radius_A=perturb_radius,
         max_random_displacement_A=float(amplitude),
         perturbed_atom_indices=perturbed_indices,

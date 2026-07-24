@@ -35,6 +35,7 @@ from .migration import (
     estimate_interstitial_target_point,
     expand_migration_target_families,
 )
+from .records import ComboContext, MetadataRecord
 from .recipe import (
     ask_removal_recipe,
     defect_class_label,
@@ -256,9 +257,9 @@ def _write_structures(
     sampling_seed: int,
     summary: dict,
     rattle_all: bool = True,
-) -> List[dict]:
+) -> List[MetadataRecord]:
     """Write all POSCAR (and optionally extxyz) files and collect metadata."""
-    metadata_records: List[dict] = []
+    metadata_records: List[MetadataRecord] = []
     n_total = len(base_combos)
 
     ss = SeedSequence(sampling_seed)
@@ -283,6 +284,18 @@ def _write_structures(
         combo_hash = combo_to_hash.get(combo, raw_combo_to_hash.get(combo, ""))
         canonical_combo = combo_to_canonical.get(combo, combo)
 
+        ctx = ComboContext(
+            class_label=class_label,
+            combo_index=combo_index,
+            combo=combo,
+            canonical_combo=canonical_combo,
+            combo_hash=combo_hash,
+            removed_species=removed_species,
+            removed_frac_coords=removed_frac_coords,
+            vacancy_topology=vacancy_topology,
+            scaling=scaling,
+        )
+
         if write_base_structures:
             sub_folder = structure_filename(
                 base_name, class_label, combo_index, None, "", include_base_name=False
@@ -292,11 +305,7 @@ def _write_structures(
                 defect_structure, sub_folder, output_dir, write_extxyz, extxyz_filename
             )
 
-            record = build_base_record(
-                class_label, combo_index, combo, canonical_combo, combo_hash,
-                removed_species, removed_frac_coords, vacancy_topology, scaling,
-                poscar_name, extxyz_name,
-            )
+            record = build_base_record(ctx, poscar_name, extxyz_name)
             metadata_records.append(record)
             save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
             summary["base_structures_written"] += 1
@@ -330,10 +339,8 @@ def _write_structures(
                     summary["seed_structures_rejected_by_distance_filter"] += 1
                     metadata_records.append(
                         build_seed_record(
-                            class_label, combo_index, seed_offset, combo,
-                            canonical_combo, combo_hash, removed_species,
-                            removed_frac_coords, vacancy_topology, scaling, perturb_radius,
-                            amplitude, perturbed_indices, False, reason, "", None,
+                            ctx, seed_offset, perturb_radius, amplitude,
+                            perturbed_indices, False, reason, "", None,
                         )
                     )
                     continue
@@ -350,11 +357,8 @@ def _write_structures(
                 )
 
                 record = build_seed_record(
-                    class_label, combo_index, seed_offset, combo,
-                    canonical_combo, combo_hash, removed_species,
-                    removed_frac_coords, vacancy_topology, scaling, perturb_radius,
-                    amplitude, perturbed_indices, True, None,
-                    poscar_name, extxyz_name,
+                    ctx, seed_offset, perturb_radius, amplitude,
+                    perturbed_indices, True, None, poscar_name, extxyz_name,
                 )
                 metadata_records.append(record)
                 save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
@@ -392,12 +396,12 @@ def _write_migration_paths(
     sampling_seed: int,
     summary: dict,
     rattle_all: bool = True,
-) -> List[dict]:
+) -> List[MetadataRecord]:
     """Write migration-path images for each vacancy combination."""
     if path_images < 2:
         raise ValueError("path_images must be at least 2")
 
-    metadata_records: List[dict] = []
+    metadata_records: List[MetadataRecord] = []
     n_total = len(base_combos)
     target_families = expand_migration_target_families(target_family_mode)
 
@@ -413,6 +417,18 @@ def _write_migration_paths(
         combo_hash = combo_to_hash.get(combo, raw_combo_to_hash.get(combo, ""))
         canonical_combo = combo_to_canonical.get(combo, combo)
 
+        ctx = ComboContext(
+            class_label=class_label,
+            combo_index=combo_index,
+            combo=combo,
+            canonical_combo=canonical_combo,
+            combo_hash=combo_hash,
+            removed_species=removed_species,
+            removed_frac_coords=removed_frac_coords,
+            vacancy_topology=vacancy_topology,
+            scaling=scaling,
+        )
+
         if write_base_structures:
             sub_folder = structure_filename(
                 base_name, class_label, combo_index, None, "", include_base_name=False
@@ -421,11 +437,7 @@ def _write_migration_paths(
             structure_dir, poscar_name, extxyz_name = _write_structure_to_subfolder(
                 defect_structure, sub_folder, output_dir, write_extxyz, extxyz_filename
             )
-            record = build_base_record(
-                class_label, combo_index, combo, canonical_combo, combo_hash,
-                removed_species, removed_frac_coords, vacancy_topology, scaling,
-                poscar_name, extxyz_name,
-            )
+            record = build_base_record(ctx, poscar_name, extxyz_name)
             metadata_records.append(record)
             save_json(record, os.path.join(structure_dir, f"{sub_folder}.json"))
             summary["base_structures_written"] += 1
@@ -501,15 +513,7 @@ def _write_migration_paths(
                             )
 
                             record = build_migration_record(
-                                class_label=class_label,
-                                combo_index=combo_index,
-                                combo=combo,
-                                canonical_combo=canonical_combo,
-                                combo_hash=combo_hash,
-                                removed_species=removed_species,
-                                removed_frac_coords=removed_frac_coords,
-                                vacancy_topology=vacancy_topology,
-                                scaling=scaling,
+                                ctx,
                                 poscar_name=poscar_name,
                                 extxyz_name=extxyz_name,
                                 path_index=path_index,
@@ -549,16 +553,8 @@ def _write_migration_paths(
                                 summary["migration_seed_structures_rejected"] += 1
                                 metadata_records.append(
                                     build_migration_seed_record(
-                                        class_label=class_label,
-                                        combo_index=combo_index,
+                                        ctx,
                                         seed_offset=seed_offset,
-                                        combo=combo,
-                                        canonical_combo=canonical_combo,
-                                        combo_hash=combo_hash,
-                                        removed_species=removed_species,
-                                        removed_frac_coords=removed_frac_coords,
-                                        vacancy_topology=vacancy_topology,
-                                        scaling=scaling,
                                         poscar_name="",
                                         extxyz_name=None,
                                         path_index=path_index,
@@ -598,16 +594,8 @@ def _write_migration_paths(
                             )
 
                             record = build_migration_seed_record(
-                                class_label=class_label,
-                                combo_index=combo_index,
+                                ctx,
                                 seed_offset=seed_offset,
-                                combo=combo,
-                                canonical_combo=canonical_combo,
-                                combo_hash=combo_hash,
-                                removed_species=removed_species,
-                                removed_frac_coords=removed_frac_coords,
-                                vacancy_topology=vacancy_topology,
-                                scaling=scaling,
                                 poscar_name=seed_poscar_name,
                                 extxyz_name=seed_extxyz_name,
                                 path_index=path_index,

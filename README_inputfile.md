@@ -146,6 +146,31 @@ parent structure).
 
 ---
 
+### `[dft_setup]`
+
+Stages the shared input files needed to run DFT single-point reference
+calculations on every generated structure (POTCAR, INCAR, KPOINTS, and a
+job-submission script). Since these parameters are the same for every
+structure in a dataset, each file is copied **once** into the output
+directory (the "parent" folder) and then relative-symlinked into every
+per-structure subfolder (the "child" folders) — so calculations stay
+self-consistent even if the whole output directory is later moved, renamed,
+or copied to another machine.
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Set to `false` to skip DFT reference-file staging entirely — no keys below are required or validated in that case. |
+| `path_to_potcar` | **required** if enabled | Path to the POTCAR file. |
+| `path_to_incar` | **required** if enabled | Path to the INCAR file. |
+| `path_to_kpoints` | optional | Path to the KPOINTS file. May be left empty **only** if the INCAR referenced above sets `KSPACING` — the runner reads the INCAR to check. If neither is present, the run fails before any files are written. |
+| `path_to_dft_job` | **required** if enabled | Path to the job-submission script (e.g. a SLURM script). Copied and symlinked under its own filename. |
+
+All required files are validated to exist **before** any structures are
+written; a missing POTCAR/INCAR/job script (or a missing KPOINTS with no
+KSPACING fallback) aborts the run immediately rather than partway through.
+
+---
+
 ## Output file naming
 
 Files follow this pattern:

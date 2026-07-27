@@ -41,3 +41,16 @@ distance_floor   = 0.80       # min-distance filter absolute floor (Å)   (defau
 output_dir            =       # leave empty to auto-generate from POSCAR name  (default: empty)
 write_base_structures = true  # write the unperturbed vacancy structure        (default: true)
 write_extxyz          = false # write .extxyz files in addition to .vasp       (default: false)
+
+# dft_setup describes paths to files that are used for dft single point reference calculations
+# as the parameters should stay the same all files can be shared between calculations
+# files are copied once into the output directory (parent) and relative-symlinked
+# into every structure subfolder (child), so calculations stay self-consistent even
+# if the whole output directory is later moved or copied elsewhere.
+# Missing required files raise immediately; set enabled = false to skip this section.
+[dft_setup]
+enabled         = true            # set to false to skip DFT reference-file staging entirely (default: true)
+path_to_potcar  = POTCAR          # path to POTCAR, copied to the output dir and symlinked into every structure subfolder
+path_to_incar   = INCAR           # path to INCAR, copied to the output dir and symlinked into every structure subfolder
+path_to_kpoints =                 # optional if INCAR sets KSPACING; otherwise required
+path_to_dft_job = dft_job.slurm   # path to the SLURM job script, copied to the output dir and symlinked into every structure subfolder

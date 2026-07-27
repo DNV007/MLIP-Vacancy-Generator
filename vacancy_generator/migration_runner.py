@@ -11,13 +11,13 @@ use ``python -m vacancy_generator`` for the full interactive workflow.
 
 from __future__ import annotations
 
-import configparser
 import os
 import sys
-from typing import Dict, Tuple
+from typing import Tuple
 
 from pymatgen.core import Structure
 
+from .config import MigrationRunConfig
 from .io import (
     ensure_directory,
     save_json,
@@ -42,21 +42,6 @@ from .symmetry import (
     keep_only_unique_combinations_by_hash,
 )
 
-_VALID_FAMILY_MODES = {"all", "direct", "tetrahedral", "octahedral"}
-
-
-# ---------------------------------------------------------------------------
-# Config loading
-# ---------------------------------------------------------------------------
-
-def load_config(path: str) -> configparser.ConfigParser:
-    """Parse an INI-style .inp file and return the ConfigParser object."""
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Input file not found: {path}")
-    cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-    cfg.read(path)
-    return cfg
-
 
 # ---------------------------------------------------------------------------
 # Main runner
@@ -64,74 +49,35 @@ def load_config(path: str) -> configparser.ConfigParser:
 
 def run_migration_from_config(config_path: str) -> None:
     """Run the migration-path pipeline using parameters from *config_path*."""
-    cfg = load_config(config_path)
+    run_config = MigrationRunConfig.from_inp_file(config_path)
+    if run_config.dft_setup is not None:
+        run_config.dft_setup.validate()
 
-    # -- [structure] ---------------------------------------------------------
-    poscar_file = cfg.get("structure", "poscar_file", fallback="POSCAR")
-    symprec = cfg.getfloat("structure", "symprec", fallback=1e-3)
-    match_tol = cfg.getfloat("structure", "match_tol", fallback=1e-4)
-
-    # -- [supercell] ---------------------------------------------------------
-    use_supercell = cfg.getboolean("supercell", "enabled", fallback=False)
-    min_length = cfg.getfloat("supercell", "min_length", fallback=10.0)
-    max_atoms = cfg.getint("supercell", "max_atoms", fallback=400)
-
-    # -- [defect] ------------------------------------------------------------
-    try:
-        recipe_text = cfg.get("defect", "recipe")
-    except (configparser.NoSectionError, configparser.NoOptionError) as exc:
-        raise ValueError(
-            "Missing required key 'recipe' under [defect] in the input file. "
-            "Expected format: 'Mg:1' or 'Mg:1, Se:2'."
-        ) from exc
-
-    # -- [migration] ---------------------------------------------------------
-    target_family_mode = cfg.get("migration", "target_family", fallback="all")
-    hop_cutoff = cfg.getfloat("migration", "hop_cutoff", fallback=4.0)
-    max_candidates = cfg.getint("migration", "max_candidates", fallback=6)
-    max_assignments = cfg.getint("migration", "max_assignments", fallback=5)
-    path_images = cfg.getint("migration", "path_images", fallback=5)
-    saddle_shift = cfg.getfloat("migration", "saddle_shift", fallback=0.15)
-    both_saddle_sides = cfg.getboolean("migration", "both_saddle_sides", fallback=False)
-    seeds_per_image = cfg.getint("migration", "seeds_per_image", fallback=0)
-    rattle_all = cfg.getboolean("migration", "rattle_all", fallback=True)
-    perturb_radius = cfg.getfloat("migration", "perturb_radius", fallback=4.0)
-    min_rattle = cfg.getfloat("migration", "min_rattle", fallback=0.02)
-    max_rattle = cfg.getfloat("migration", "max_rattle", fallback=0.08)
-    distance_scale = cfg.getfloat("migration", "distance_scale", fallback=0.55)
-    distance_floor = cfg.getfloat("migration", "distance_floor", fallback=0.80)
-    sampling_seed = cfg.getint("migration", "sampling_seed", fallback=12345)
-
-    # -- [output] ------------------------------------------------------------
-    write_base_structures = cfg.getboolean("output", "write_base_structures", fallback=True)
-    write_extxyz = cfg.getboolean("output", "write_extxyz", fallback=False)
-    output_dir_raw = cfg.get("output", "output_dir", fallback="").strip()
-
-    # -- Validate all parameters before touching the filesystem --------------
-    if symprec <= 0:
-        raise ValueError("symprec must be > 0.")
-    if match_tol <= 0:
-        raise ValueError("match_tol must be > 0.")
-    if use_supercell and min_length <= 0:
-        raise ValueError("supercell min_length must be > 0.")
-    if use_supercell and max_atoms < 1:
-        raise ValueError("supercell max_atoms must be >= 1.")
-    if target_family_mode not in _VALID_FAMILY_MODES:
-        raise ValueError(
-            f"Unknown target_family '{target_family_mode}'. "
-            f"Valid values: {sorted(_VALID_FAMILY_MODES)}"
-        )
-    if hop_cutoff <= 0:
-        raise ValueError("hop_cutoff must be > 0.")
-    if path_images < 2:
-        raise ValueError("path_images must be at least 2.")
-    if seeds_per_image > 0:
-        if min_rattle < 0:
-            raise ValueError("min_rattle must be >= 0.")
-        if max_rattle < min_rattle:
-            raise ValueError("max_rattle must be >= min_rattle.")
-        if not rattle_all and perturb_radius < 0:
-            raise ValueError("perturb_radius must be >= 0.")
+    poscar_file = run_config.poscar_file
+    symprec = run_config.symprec
+    match_tol = run_config.match_tol
+    use_supercell = run_config.use_supercell
+    min_length = run_config.min_length
+    max_atoms = run_config.max_atoms
+    recipe_text = run_config.recipe_text
+    target_family_mode = run_config.target_family_mode
+    hop_cutoff = run_config.hop_cutoff
+    max_candidates = run_config.max_candidates
+    max_assignments = run_config.max_assignments
+    path_images = run_config.path_images
+    saddle_shift = run_config.saddle_shift
+    both_saddle_sides = run_config.both_saddle_sides
+    seeds_per_image = run_config.seeds_per_image
+    rattle_all = run_config.rattle_all
+    perturb_radius = run_config.perturb_radius
+    min_rattle = run_config.min_rattle
+    max_rattle = run_config.max_rattle
+    distance_scale = run_config.distance_scale
+    distance_floor = run_config.distance_floor
+    sampling_seed = run_config.sampling_seed
+    write_base_structures = run_config.write_base_structures
+    write_extxyz = run_config.write_extxyz
+    output_dir_raw = run_config.output_dir_raw
 
     # -- Load structure ------------------------------------------------------
     print(f"\nReading structure from: {poscar_file}")
@@ -255,6 +201,14 @@ def run_migration_from_config(config_path: str) -> None:
         summary=summary,
         rattle_all=rattle_all,
     )
+
+    # -- Stage shared DFT reference files -------------------------------------
+    if run_config.dft_setup is not None:
+        print("\nStaging DFT reference files …")
+        run_config.dft_setup.stage(output_dir)
+        summary["dft_setup_staged"] = True
+    else:
+        summary["dft_setup_staged"] = False
 
     # -- Save outputs --------------------------------------------------------
     metadata_csv_path = os.path.join(output_dir, "metadata.csv")

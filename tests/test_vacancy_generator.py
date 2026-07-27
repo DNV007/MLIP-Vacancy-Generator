@@ -709,6 +709,141 @@ class TestIO:
 
 
 # ===========================================================================
+# Config
+# ===========================================================================
+
+class TestConfig:
+    def _write_inp(self, tmp_path, body: str) -> str:
+        path = tmp_path / "test.inp"
+        path.write_text(body)
+        return str(path)
+
+    def test_from_inp_file_defaults(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        path = self._write_inp(tmp_path, "[defect]\nrecipe = Mg:1\n")
+        config = MigrationRunConfig.from_inp_file(path)
+        assert config.recipe_text == "Mg:1"
+        assert config.poscar_file == "POSCAR"
+        assert config.path_images == 5
+        assert config.dft_setup is None
+
+    def test_from_inp_file_missing_recipe_raises(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        path = self._write_inp(tmp_path, "[structure]\nposcar_file = POSCAR\n")
+        with pytest.raises(ValueError):
+            MigrationRunConfig.from_inp_file(path)
+
+    def test_from_inp_file_invalid_path_images_raises(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        path = self._write_inp(
+            tmp_path, "[defect]\nrecipe = Mg:1\n\n[migration]\npath_images = 1\n"
+        )
+        with pytest.raises(ValueError):
+            MigrationRunConfig.from_inp_file(path)
+
+    def test_dft_setup_absent_when_no_section(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        path = self._write_inp(tmp_path, "[defect]\nrecipe = Mg:1\n")
+        config = MigrationRunConfig.from_inp_file(path)
+        assert config.dft_setup is None
+
+    def test_dft_setup_absent_when_disabled(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        body = (
+            "[defect]\nrecipe = Mg:1\n\n"
+            "[dft_setup]\nenabled = false\n"
+        )
+        path = self._write_inp(tmp_path, body)
+        config = MigrationRunConfig.from_inp_file(path)
+        assert config.dft_setup is None
+
+    def test_dft_setup_missing_required_key_raises(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        body = (
+            "[defect]\nrecipe = Mg:1\n\n"
+            "[dft_setup]\nenabled = true\npath_to_potcar = POTCAR\n"
+        )
+        path = self._write_inp(tmp_path, body)
+        with pytest.raises(ValueError):
+            MigrationRunConfig.from_inp_file(path)
+
+    def test_dft_setup_kpoints_optional_at_parse_time(self, tmp_path):
+        from vacancy_generator.config import MigrationRunConfig
+        body = (
+            "[defect]\nrecipe = Mg:1\n\n"
+            "[dft_setup]\n"
+            "path_to_potcar = POTCAR\n"
+            "path_to_incar = INCAR\n"
+            "path_to_dft_job = job.slurm\n"
+        )
+        path = self._write_inp(tmp_path, body)
+        config = MigrationRunConfig.from_inp_file(path)
+        assert config.dft_setup is not None
+        assert config.dft_setup.kpoints is None
+
+    def test_dft_setup_validate_missing_file_raises(self, tmp_path):
+        from vacancy_generator.config import DftSetup
+        setup = DftSetup(
+            potcar=str(tmp_path / "POTCAR"),
+            incar=str(tmp_path / "INCAR"),
+            dft_job=str(tmp_path / "job.slurm"),
+        )
+        with pytest.raises(FileNotFoundError):
+            setup.validate()
+
+    def test_dft_setup_validate_kspacing_fallback(self, tmp_path):
+        from vacancy_generator.config import DftSetup
+        potcar = tmp_path / "POTCAR"
+        incar = tmp_path / "INCAR"
+        job = tmp_path / "job.slurm"
+        potcar.write_text("dummy")
+        incar.write_text("ENCUT = 500\nKSPACING = 0.3\n")
+        job.write_text("#!/bin/bash\n")
+        setup = DftSetup(potcar=str(potcar), incar=str(incar), dft_job=str(job))
+        setup.validate()  # should not raise
+
+    def test_dft_setup_validate_no_kpoints_no_kspacing_raises(self, tmp_path):
+        from vacancy_generator.config import DftSetup
+        potcar = tmp_path / "POTCAR"
+        incar = tmp_path / "INCAR"
+        job = tmp_path / "job.slurm"
+        potcar.write_text("dummy")
+        incar.write_text("ENCUT = 500\n")
+        job.write_text("#!/bin/bash\n")
+        setup = DftSetup(potcar=str(potcar), incar=str(incar), dft_job=str(job))
+        with pytest.raises(ValueError):
+            setup.validate()
+
+    def test_dft_setup_stage_copies_and_symlinks(self, tmp_path):
+        from vacancy_generator.config import DftSetup
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        potcar = src_dir / "POTCAR"
+        incar = src_dir / "INCAR"
+        kpoints = src_dir / "KPOINTS"
+        job = src_dir / "job.slurm"
+        for f in (potcar, incar, kpoints, job):
+            f.write_text("dummy")
+
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        struct_dir = output_dir / "structure_0001"
+        struct_dir.mkdir()
+
+        setup = DftSetup(
+            potcar=str(potcar), incar=str(incar),
+            dft_job=str(job), kpoints=str(kpoints),
+        )
+        setup.stage(str(output_dir))
+
+        for name in ("POTCAR", "INCAR", "KPOINTS", "job.slurm"):
+            assert (output_dir / name).is_file()
+            link = struct_dir / name
+            assert link.is_symlink()
+            assert os.path.realpath(str(link)) == os.path.realpath(str(output_dir / name))
+
+
+# ===========================================================================
 # JSON serialisability
 # ===========================================================================
 

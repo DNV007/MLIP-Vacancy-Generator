@@ -11,10 +11,12 @@ raw or symmetry-deduplicated vacancy combinations, randomly rattled seeds
 near each defect, and interpolated migration/hop-path images between a
 vacancy and a candidate diffusing atom. It writes structure files (`.vasp`,
 optionally `.extxyz`) plus metadata (CSV/JSON) describing every structure it
-produced. It does not run or parse DFT calculations — it only prepares
-candidate inputs (see `next_steps.txt` for the roadmap: DFT calc module,
-data extraction, MLIP fitting, and benchmarking are explicitly not built
-yet).
+produced. The migration runner can also stage shared DFT reference files
+(POTCAR/INCAR/KPOINTS/job script) into the output tree — see `[dft_setup]`
+below — but it does not run or parse DFT calculations itself, and does not
+generate per-structure INCAR/KPOINTS content (see `next_steps.txt` for the
+roadmap: the DFT calculation module, data extraction, MLIP fitting, and
+benchmarking are explicitly not built yet).
 
 The actual package lives in `vacancy_generator/`; the repo root also has
 older standalone scripts (`generate_vacancy_structures_for_MLIP_datasetv3.py`,
@@ -55,7 +57,7 @@ export), `dscribe` (enables SOAP-based diversity pruning). Availability is
 probed once in `_compat.py` (`ASE_ADAPTOR_AVAILABLE`, `ASE_IO_AVAILABLE`,
 `DSCRIBE_AVAILABLE`) and checked everywhere else instead of re-importing.
 
-Both `pytest tests/ -q` and `python tests/simulation.py` are green (78 tests
+Both `pytest tests/ -q` and `python tests/simulation.py` are green (89 tests
 pass; all 3 simulation cases complete). If you change the `build_*_record`
 signatures in `io.py` or the `MetadataRecord`/`ComboContext` shape in
 `records.py` again, both test files construct records via
@@ -74,13 +76,51 @@ already when the `ComboContext` refactor landed without touching the tests.
   `_write_migration_paths` (migration mode).
 - **`migration_runner.py`** — non-interactive, `.inp`-file-driven entry
   point (`python -m vacancy_generator.migration_runner <file>.inp`) for
-  scripted/repeatable migration-path generation. Parses an INI-style config
-  (see `README_inputfile.md` for the full key reference) and calls into the
-  same underlying migration-building code as `main.py`'s migration mode.
+  scripted/repeatable migration-path generation. Delegates config parsing
+  to `config.py` (see `README_inputfile.md` for the full key reference) and
+  calls into the same underlying migration-building code as `main.py`'s
+  migration mode.
 
 Both entry points converge on the same lower-level modules — there is no
 separate logic path per entry point beyond argument sourcing (prompts vs.
-config file).
+config file). `main.py`'s interactive prompts have no equivalent of
+`config.py`/`[dft_setup]` — DFT reference-file staging is currently
+`migration_runner`-only.
+
+### `config.py`: typed `.inp` parsing + DFT reference-file staging
+
+`migration_runner.py` used to parse its `.inp` file into ~30 loose local
+variables inside one function, with validation as scattered inline `if`s.
+That's now `MigrationRunConfig.from_inp_file()` — a frozen dataclass built
+in one place, validated once (`_validate()`), then read as attributes
+everywhere downstream instead of re-threading two dozen locals.
+
+- **`[dft_setup]`** (optional; `enabled = true` by default when the section
+  is present) is modeled as a nested `Optional[DftSetup]` — `None` when the
+  section is absent or `enabled = false`, so downstream code only needs one
+  truthy check. `DftSetup` holds `potcar`/`incar`/`dft_job` (required) and
+  `kpoints` (optional — see below).
+- Parsing (`DftSetup.from_config`) and filesystem validation
+  (`DftSetup.validate`) are deliberately separate: parsing never touches
+  disk, so `MigrationRunConfig` stays constructible/testable without a
+  populated directory. `migration_runner.run_migration_from_config` calls
+  `.validate()` explicitly, before loading the structure or writing
+  anything, so a missing/misconfigured DFT file aborts the run before any
+  output exists.
+- **KPOINTS/KSPACING fallback**: `path_to_kpoints` may be omitted only if
+  the referenced INCAR contains a `KSPACING` line (checked by regex against
+  the INCAR's raw text in `validate()`); otherwise validation raises.
+- **`DftSetup.stage(output_dir)`** copies each configured file into
+  `output_dir` **once**, under its VASP-mandated name (`POTCAR`, `INCAR`,
+  `KPOINTS`) regardless of the source filename (e.g. `INCAR_MgSc2Se4` is
+  copied to `output_dir/INCAR`) — the job script is the one exception and
+  keeps its original basename, since VASP has no fixed naming convention
+  for a submission script. It then walks every existing per-structure
+  subfolder directly under `output_dir` (created earlier by
+  `_write_structure_to_subfolder` in `main.py`) and adds a **relative**
+  symlink (`../POTCAR`, not an absolute path) to each staged file, so the
+  whole output tree keeps working after being moved/copied/rsynced
+  elsewhere (e.g. to an HPC cluster).
 
 ### Generation pipeline (conceptual flow)
 

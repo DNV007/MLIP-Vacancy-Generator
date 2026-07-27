@@ -6,7 +6,7 @@
 # Edit the values to match your system before running.
 
 [structure]
-poscar_file = POSCAR          # path to the input POSCAR / CONTCAR  (default: POSCAR)
+poscar_file = ./input_files/POSCAR          # path to the input POSCAR / CONTCAR  (default: POSCAR)
 symprec     = 1e-3            # spglib symmetry tolerance            (default: 1e-3)
 match_tol   = 1e-4            # fractional-coordinate site-matching  (default: 1e-4)
 
@@ -50,7 +50,7 @@ write_extxyz          = false # write .extxyz files in addition to .vasp       (
 # Missing required files raise immediately; set enabled = false to skip this section.
 [dft_setup]
 enabled         = true            # set to false to skip DFT reference-file staging entirely (default: true)
-path_to_potcar  = POTCAR          # path to POTCAR, copied to the output dir and symlinked into every structure subfolder
-path_to_incar   = INCAR           # path to INCAR, copied to the output dir and symlinked into every structure subfolder
-path_to_kpoints =                 # optional if INCAR sets KSPACING; otherwise required
-path_to_dft_job = dft_job.slurm   # path to the SLURM job script, copied to the output dir and symlinked into every structure subfolder
+path_to_potcar  = ./input_files/POTCAR_MgSc2Se4          # path to POTCAR, copied to the output dir and symlinked into every structure subfolder
+path_to_incar   = ./input_files/INCAR_MgSc2Se4           # path to INCAR, copied to the output dir and symlinked into every structure subfolder
+path_to_kpoints = ./input_files/KPOINTS                # optional if INCAR sets KSPACING; otherwise required
+path_to_dft_job = ./input_files/dft_job.slurm   # path to the SLURM job script, copied to the output dir and symlinked into every structure subfolder

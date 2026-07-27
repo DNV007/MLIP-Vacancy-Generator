@@ -3,18 +3,22 @@ DONE; 0. Include rattle effects for whole structure as loop (maybe 10 times per 
 DONE; 1. Data saving module
 DONE; 1.1 Get structure as json or atoms
 DONE; 1.2 Pass structure to calculation dir generation subscript
-DONE; 1.3 add dataset_type; maybe later: training, validation, test -> think about simple function to assign, e.g. statistical model "label from top to bottom, if 'training' wasn't one of the last three assignments, automatically assign 'training' to the current data point" (maybe split evenly), make splits available (e.g. x% training, y% validation, z% test -> Pareto)
+DONE; 1.3 add dataset_type; maybe later: training, validation, test
+1.4 Think about simple function to assign, e.g. statistical model to 1.3 "label from top to bottom, if 'training' wasn't one of the last three assignments, automatically assign 'training' to the current data point" (maybe split evenly), make splits available (e.g. x% training, y% validation, z% test -> Pareto)
 
 2. DFT calculation module
-2.1 Prototype INCAR
-2.2 DFT calculation setup:
+DONE; 2.1 Prototype INCAR
+DONE; 2.2 DFT calculation setup:
 	POTCAR
 	INCAR
 	KPOINTS
 	SLURM
-2. Isolated atom reference energies (important for transferability; can default to 0 for now)
+2. Isolated atom reference energies (important for transferability; can default to 0 for now) -> cubic box; convergence for lattice parameters, ENCUT, KPOINTS, SIGMA (alternative to SIGMA?); calculation as fall back if not found in sqlite database; allow arbitrary values of 0 for test runs or user wishes to use 0.
 
 3. Data extraction module
+3.0 What data to extract/save? Compress calculation dir if extraction was successful?
+3.1 Create object that holds all the data from a calculation
+3.2 Create export methods for the object (to_json, to_csv, to_sqlite for now but should be expendable if other outputs are preferred), append to file or create anew
 
 4. MLIP generation module
 

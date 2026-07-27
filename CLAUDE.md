@@ -13,10 +13,12 @@ vacancy and a candidate diffusing atom. It writes structure files (`.vasp`,
 optionally `.extxyz`) plus metadata (CSV/JSON) describing every structure it
 produced. The migration runner can also stage shared DFT reference files
 (POTCAR/INCAR/KPOINTS/job script) into the output tree — see `[dft_setup]`
-below — but it does not run or parse DFT calculations itself, and does not
-generate per-structure INCAR/KPOINTS content (see `next_steps.txt` for the
-roadmap: the DFT calculation module, data extraction, MLIP fitting, and
-benchmarking are explicitly not built yet).
+below — but it does not run DFT calculations itself, and does not generate
+per-structure INCAR/KPOINTS content. Once a user has submitted VASP jobs
+from the staged output tree, `vacancy_generator.dft_extraction` (see below)
+parses the finished `vasprun.xml` results back into a separate results
+table — everything past that (MLIP fitting, benchmarking) is still not
+built (see `next_steps.txt` for the roadmap).
 
 The actual package lives in `vacancy_generator/`; the repo root also has
 older standalone scripts (`generate_vacancy_structures_for_MLIP_datasetv3.py`,
@@ -38,6 +40,10 @@ python -m vacancy_generator
 # Config-file-driven migration-path generation (no prompts, scriptable)
 python -m vacancy_generator.migration_runner generate_migration_images.inp
 
+# Harvest finished VASP results (vasprun.xml) from a generation output tree,
+# after the user has run the staged slurm jobs; writes dft_results.csv/.json
+python -m vacancy_generator.dft_extraction.runner <output_dir>
+
 # Run the pytest suite
 python3 -m pytest tests/ -q
 
@@ -57,7 +63,7 @@ export), `dscribe` (enables SOAP-based diversity pruning). Availability is
 probed once in `_compat.py` (`ASE_ADAPTOR_AVAILABLE`, `ASE_IO_AVAILABLE`,
 `DSCRIBE_AVAILABLE`) and checked everywhere else instead of re-importing.
 
-Both `pytest tests/ -q` and `python tests/simulation.py` are green (89 tests
+Both `pytest tests/ -q` and `python tests/simulation.py` are green (106 tests
 pass; all 3 simulation cases complete). If you change the `build_*_record`
 signatures in `io.py` or the `MetadataRecord`/`ComboContext` shape in
 `records.py` again, both test files construct records via
@@ -121,6 +127,76 @@ everywhere downstream instead of re-threading two dozen locals.
   symlink (`../POTCAR`, not an absolute path) to each staged file, so the
   whole output tree keeps working after being moved/copied/rsynced
   elsewhere (e.g. to an HPC cluster).
+
+### `dft_extraction/`: harvesting finished VASP results
+
+A separate subpackage, run independently and later than everything above —
+after a user has taken the staged output tree, submitted VASP single-point
+jobs from each per-structure subfolder, and those jobs have finished.
+`python -m vacancy_generator.dft_extraction.runner <output_dir>` walks
+`output_dir` **one level deep**: every immediate subdirectory that has a
+matching `<subfolder>.json` sidecar (the generation-time metadata record
+`main.py`/`migration_runner.py` already wrote there) is treated as one
+structure; subdirectories without one are silently skipped rather than
+treated as failed calculations.
+
+- **Results are a separate table, not merged into the generation-time
+  CSV/JSON.** `dft_results.csv`/`.json` are written fresh into `output_dir`,
+  joined to the generation metadata only by the `poscar_file` key — read
+  verbatim from the sidecar JSON (`extract.read_join_key`), never
+  reconstructed from folder names. This was a deliberate choice over
+  updating the existing rows in place: the generation output is a completed
+  artifact by the time extraction runs, DFT jobs finish at different times,
+  and two keyed tables is literally the shape a future SQL schema takes
+  (see "Where things are heading" below) — no rework needed at that point.
+- **`DftResultRecord`** (`dft_extraction/records.py`) is a plain dataclass,
+  deliberately *not* part of the `MetadataRecord` hierarchy in `records.py`
+  — it only reuses that module's `_sanitise()` helper so its own `to_dict()`
+  follows the same numpy-free-flattening convention and drops straight into
+  the existing `save_metadata_csv`/`save_json` from `io.py` (those two
+  functions duck-type on `hasattr(obj, "to_dict")` rather than
+  `isinstance(_, MetadataRecord)` specifically so unrelated record types
+  like this one can reuse them). It has its own hand-maintained
+  `DFT_FIELD_ORDER`, passed via `save_metadata_csv`'s `field_order` param —
+  `_METADATA_FIELD_ORDER` itself is untouched.
+- **`status` vs. `converged` are deliberately separate fields.** `status`
+  (`"ok"`/`"missing"`/`"unparsable"`/`"unconverged"`) is job state; `converged`
+  is strictly the physical question of whether the SCF loop reached `EDIFF`
+  (`Vasprun.converged_electronic`). `extract_one` always returns a record —
+  a missing or malformed `vasprun.xml` becomes a row with an explanatory
+  `error` string instead of raising, so an incomplete/failed slurm job stays
+  visible in the output table rather than silently vanishing. The only case
+  `extract_one` raises is an unusable sidecar JSON itself (no `poscar_file`
+  key), since without a join key no meaningful row can be produced;
+  `runner.extract_all` catches that specifically and continues.
+- **Uses pymatgen's `Vasprun`, not ASE**, even though `ase` is available
+  elsewhere in this repo for `.extxyz` export. `Vasprun` exposes
+  `converged_electronic`, `.parameters` (`EDIFF`/`SIGMA`), and
+  `ionic_steps[-1]["e_fr_energy"]`/`["forces"]`/`["stress"]` directly, all
+  needed for the convergence check; pymatgen is also already this repo's
+  hard dependency (see Commands above), so this avoids making `ase` a hard
+  dependency for one submodule while `_compat.py` treats it as optional
+  everywhere else. `e_fr_energy` (VASP's TOTEN / force-consistent free
+  energy) is deliberately used as `energy_eV`, not the sigma→0 extrapolated
+  energy — the reasoning being that VASP forces are the analytic gradient of
+  TOTEN, not of the extrapolated energy, and MLIP training (MACE/ACE) wants
+  the energy/forces gradient-consistent. With Gaussian smearing (`ISMEAR=0`,
+  the smearing this repo's calculations use) the two energies do differ
+  non-trivially, unlike tetrahedron-method (`ISMEAR=-5`) runs where the
+  entropy term is zero and the distinction is moot.
+- **Forces are never stored inline** in `DftResultRecord`/the CSV — an Nx3
+  array in one cell isn't readable and is exactly the kind of column a SQL
+  migration would normalize out anyway. `extract_one` writes them to a
+  per-structure `dft_forces.json` sidecar (inside `structure_dir`, alongside
+  `vasprun.xml`) and stores only the relative path in `forces_file`. That
+  path is derived from `structure_dir`'s own location, not from
+  `poscar_file`'s directory component — the two are not guaranteed to match
+  (see the `poscar_file`-read-verbatim point above), so deriving it from the
+  wrong one would silently point `forces_file` at a file that doesn't exist.
+- The sidecar-write and all `Vasprun` parsing happen inside one `try/except`
+  in `extract_one` — a failure at either step downgrades the row to
+  `status="unparsable"` with an `error` message rather than raising, keeping
+  `extract_all`'s contract that one bad structure never aborts the whole run.
 
 ### Generation pipeline (conceptual flow)
 
@@ -202,12 +278,18 @@ already list the issue.
 ### Where things are heading
 
 `next_steps.txt` documents the intended larger pipeline (this generator is
-step 1 of 5): DFT calculation module, data extraction, MLIP generation, and
-benchmarking are all still unbuilt. Also noted there: metadata records are
+step 1 of 5). DFT calculation setup (POTCAR/INCAR/KPOINTS/SLURM staging,
+`[dft_setup]`) and a first cut of data extraction (`dft_extraction/`, above)
+are now built; isolated-atom reference energies, MLIP generation, and
+benchmarking are still unbuilt. Also noted there: metadata records are
 eventually meant to be written into a proper database rather than CSV/JSON
 (the `dataset_type` field — train/validation/test split label, currently
 always `"unassigned"` — exists for this future use and needs an actual
-assignment strategy, e.g. a Pareto-style split function). Keep this
-direction in mind when touching `records.py`/`io.py`: the dataclass +
-`to_dict()` boundary was chosen specifically so a future SQL-writing layer
-can consume the same objects without another metadata-modeling rewrite.
+assignment strategy, e.g. a Pareto-style split function). The generation
+metadata and `dft_extraction`'s results table are already two separate
+CSV/JSON tables joined by `poscar_file` specifically so that migration is a
+matter of pointing both at SQL tables with a foreign key, not a schema
+redesign. Keep this direction in mind when touching `records.py`/`io.py`/
+`dft_extraction/records.py`: the dataclass + `to_dict()` boundary was chosen
+specifically so a future SQL-writing layer can consume the same objects
+without another metadata-modeling rewrite.

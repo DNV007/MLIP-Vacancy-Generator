@@ -14,7 +14,6 @@ from ._compat import ASE_ADAPTOR_AVAILABLE, ASE_IO_AVAILABLE
 from .records import (
     BaseRecord,
     ComboContext,
-    MetadataRecord,
     MigrationRecord,
     MigrationSeedRecord,
     SeedRecord,
@@ -122,20 +121,27 @@ def maybe_write_extxyz(structure: Structure, path: str) -> bool:
 # Serialisation
 # ---------------------------------------------------------------------------
 
-def save_metadata_csv(records: List[object], path: str) -> None:
+def save_metadata_csv(records: List[object],
+                      path: str,
+                      field_order: Optional[List[str]] = None) -> None:
     """Save metadata to CSV with a canonical, human-friendly column order.
 
-    Accepts either ``MetadataRecord`` instances or plain dicts (e.g. SOAP rows).
-    ``None`` values are rendered by :mod:`csv` as empty strings, matching the
-    previous ``""`` sentinel behaviour.
+    Accepts any object exposing ``to_dict()`` (the record dataclasses in
+    :mod:`.records`, or :class:`~.dft_extraction.records.DftResultRecord`) as
+    well as plain dicts (e.g. SOAP rows). ``None`` values are rendered by
+    :mod:`csv` as empty strings, matching the previous ``""`` sentinel behaviour.
+
+    ``field_order`` overrides the generation-metadata column order for tables
+    with a different shape; keys absent from it are appended alphabetically.
     """
     if not records:
         return
 
-    rows = [r.to_dict() if isinstance(r, MetadataRecord) else r for r in records]
+    order = _METADATA_FIELD_ORDER if field_order is None else field_order
+    rows = [r.to_dict() if hasattr(r, "to_dict") else r for r in records]
     all_keys = {key for row in rows for key in row}
-    extra_keys = sorted(all_keys - set(_METADATA_FIELD_ORDER))
-    fieldnames = [f for f in _METADATA_FIELD_ORDER if f in all_keys] + extra_keys
+    extra_keys = sorted(all_keys - set(order))
+    fieldnames = [f for f in order if f in all_keys] + extra_keys
 
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -153,8 +159,12 @@ def _json_default(value: Any) -> Any:
 
 
 def _to_serialisable(data: object) -> object:
-    """Recursively convert metadata records to plain dicts for serialisation."""
-    if isinstance(data, MetadataRecord):
+    """Recursively convert records to plain dicts for serialisation.
+
+    Duck-typed on ``to_dict()`` so any record dataclass works here, not just the
+    generation-time :class:`MetadataRecord` hierarchy.
+    """
+    if hasattr(data, "to_dict"):
         return data.to_dict()
     if isinstance(data, (list, tuple)):
         return [_to_serialisable(item) for item in data]
